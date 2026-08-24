@@ -1,0 +1,635 @@
+/**
+ * Instagram adapter — Meta's Instagram Platform content publishing API.
+ *
+ * The real flow, as Meta specifies it:
+ *   1. POST /{ig-user-id}/media          → returns a container id
+ *   2. GET  /{container-id}?fields=status_code → poll until FINISHED
+ *   3. POST /{ig-user-id}/media_publish  → returns the published media id
+ *
+ * Carousels create one child container per item, then a parent CAROUSEL
+ * container. Reels use media_type=REELS, Stories use media_type=STORIES.
+ *
+ * Requirements Meta enforces, which the setup wizard walks the user through:
+ *   - Instagram *Business* account (Creator accounts cannot content-publish)
+ *   - linked Facebook Page, and a Meta app with Instagram configured
+ *   - `instagram_business_content_publish` approved via App Review
+ *   - media hosted at a public URL Meta's servers can fetch
+ *   - 100 API-published posts per rolling 24 hours
+ */
+import 'server-only';
+import { env } from '../env';
+import { connectionError, FullSendError } from '../errors';
+import { logger } from '../logger';
+import type { ContentFormat, PostMetrics } from '../types';
+import {
+  emptyMetrics,
+  type AccountInfo,
+  type OAuthStartResult,
+  type PlatformAdapter,
+  type PlatformCapabilities,
+  type PublishInput,
+  type PublishResult,
+  type TokenSet,
+} from './types';
+
+const log = logger('instagram');
+
+/** Current permission names. The pre-2025 `instagram_basic` scopes are gone. */
+export const INSTAGRAM_SCOPES_FACEBOOK_LOGIN = [
+  'instagram_basic',
+  'instagram_content_publish',
+  'instagram_manage_insights',
+  'pages_show_list',
+  'pages_read_engagement',
+  'business_management',
+];
+
+export const INSTAGRAM_SCOPES_INSTAGRAM_LOGIN = [
+  'instagram_business_basic',
+  'instagram_business_content_publish',
+  'instagram_business_manage_insights',
+];
+
+const CONTAINER_POLL_ATTEMPTS = 30;
+const CONTAINER_POLL_INTERVAL_MS = 4000;
+
+export class InstagramAdapter implements PlatformAdapter {
+  readonly platform = 'instagram' as const;
+
+  readonly capabilities: PlatformCapabilities = {
+    directPublish: true,
+    // Meta has no scheduling endpoint — FullSend holds the post and fires on time.
+    nativeScheduling: false,
+    postAnalytics: true,
+    accountAnalytics: true,
+    supportedFormats: ['reel', 'carousel', 'static', 'story'],
+    requiresPublicMediaUrl: true,
+    dailyPostLimit: 100,
+    restrictions: [
+      'Requires an Instagram Business account linked to a Facebook Page',
+      'instagram_business_content_publish must be approved through Meta App Review',
+      'Media must be reachable at a public HTTPS URL',
+      '100 API-published posts per rolling 24 hours',
+    ],
+  };
+
+  get configured(): boolean {
+    return Boolean(env.meta.appId && env.meta.appSecret);
+  }
+
+  private get instagramLogin(): boolean {
+    return env.meta.loginMode === 'instagram_login';
+  }
+
+  private get scopes(): string[] {
+    return this.instagramLogin
+      ? INSTAGRAM_SCOPES_INSTAGRAM_LOGIN
+      : INSTAGRAM_SCOPES_FACEBOOK_LOGIN;
+  }
+
+  private graph(path: string): string {
+    const host = this.instagramLogin ? env.meta.instagramGraphHost : env.meta.graphHost;
+    return `${host}/${env.meta.graphVersion}${path}`;
+  }
+
+  /* ── OAuth ────────────────────────────────────────────────────────────── */
+
+  authorizeUrl(state: string, redirectUri: string): OAuthStartResult {
+    this.assertConfigured();
+    if (this.instagramLogin) {
+      const p = new URLSearchParams({
+        client_id: env.meta.appId!,
+        redirect_uri: redirectUri,
+        response_type: 'code',
+        scope: this.scopes.join(','),
+        state,
+      });
+      return { url: `https://www.instagram.com/oauth/authorize?${p}` };
+    }
+    const p = new URLSearchParams({
+      client_id: env.meta.appId!,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: this.scopes.join(','),
+      state,
+    });
+    return { url: `https://www.facebook.com/${env.meta.graphVersion}/dialog/oauth?${p}` };
+  }
+
+  async exchangeCode(code: string, redirectUri: string): Promise<TokenSet> {
+    this.assertConfigured();
+
+    if (this.instagramLogin) {
+      // Instagram Login: form POST, then upgrade the short-lived token.
+      const body = new URLSearchParams({
+        client_id: env.meta.appId!,
+        client_secret: env.meta.appSecret!,
+        grant_type: 'authorization_code',
+        redirect_uri: redirectUri,
+        code,
+      });
+      const short = await this.json<any>('https://api.instagram.com/oauth/access_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+      const long = await this.json<any>(
+        `${env.meta.instagramGraphHost}/access_token?` +
+          new URLSearchParams({
+            grant_type: 'ig_exchange_token',
+            client_secret: env.meta.appSecret!,
+            access_token: short.access_token,
+          }),
+      );
+      return {
+        accessToken: long.access_token,
+        refreshToken: null,
+        expiresAt: new Date(Date.now() + (long.expires_in ?? 5_184_000) * 1000),
+        refreshExpiresAt: null,
+        scopes: this.scopes,
+      };
+    }
+
+    // Facebook Login: short-lived user token, then a long-lived one (~60 days).
+    const short = await this.json<any>(
+      this.graph('/oauth/access_token') +
+        '?' +
+        new URLSearchParams({
+          client_id: env.meta.appId!,
+          client_secret: env.meta.appSecret!,
+          redirect_uri: redirectUri,
+          code,
+        }),
+    );
+    const long = await this.json<any>(
+      this.graph('/oauth/access_token') +
+        '?' +
+        new URLSearchParams({
+          grant_type: 'fb_exchange_token',
+          client_id: env.meta.appId!,
+          client_secret: env.meta.appSecret!,
+          fb_exchange_token: short.access_token,
+        }),
+    );
+    return {
+      accessToken: long.access_token,
+      refreshToken: null,
+      expiresAt: new Date(Date.now() + (long.expires_in ?? 5_184_000) * 1000),
+      refreshExpiresAt: null,
+      scopes: this.scopes,
+    };
+  }
+
+  /**
+   * Instagram Login tokens refresh in place. Facebook Page tokens derived from
+   * a long-lived user token do not expire, so there is nothing to refresh.
+   */
+  async refresh(tokens: TokenSet): Promise<TokenSet> {
+    if (!this.instagramLogin) return tokens;
+    const r = await this.json<any>(
+      `${env.meta.instagramGraphHost}/refresh_access_token?` +
+        new URLSearchParams({ grant_type: 'ig_refresh_token', access_token: tokens.accessToken }),
+    );
+    return {
+      ...tokens,
+      accessToken: r.access_token,
+      expiresAt: new Date(Date.now() + (r.expires_in ?? 5_184_000) * 1000),
+    };
+  }
+
+  /* ── Account ──────────────────────────────────────────────────────────── */
+
+  async getAccount(tokens: TokenSet): Promise<AccountInfo> {
+    if (this.instagramLogin) {
+      const me = await this.json<any>(
+        `${env.meta.instagramGraphHost}/me?` +
+          new URLSearchParams({
+            fields: 'user_id,username,name,profile_picture_url,followers_count,account_type',
+            access_token: tokens.accessToken,
+          }),
+      );
+      this.assertBusinessAccount(me.account_type);
+      return {
+        externalId: String(me.user_id ?? me.id),
+        username: me.username ?? '',
+        displayName: me.name ?? null,
+        avatarUrl: me.profile_picture_url ?? null,
+        followers: me.followers_count ?? 0,
+        metadata: { account_type: me.account_type, login_mode: 'instagram_login' },
+      };
+    }
+
+    // Facebook Login: find the Page, then its linked Instagram business account.
+    const pages = await this.json<any>(
+      this.graph('/me/accounts') +
+        '?' +
+        new URLSearchParams({
+          fields: 'id,name,access_token,instagram_business_account{id,username,name,profile_picture_url,followers_count}',
+          access_token: tokens.accessToken,
+        }),
+    );
+
+    const page = (pages.data ?? []).find((p: any) => p.instagram_business_account);
+    if (!page) {
+      throw connectionError(
+        'instagram',
+        'No Instagram Business account is linked to your Facebook Pages',
+        'In the Instagram app: Settings → Account type and tools → Switch to professional account → ' +
+          'Business, then link it to a Facebook Page. Reconnect once that is done.',
+      );
+    }
+
+    const ig = page.instagram_business_account;
+    return {
+      externalId: String(ig.id),
+      username: ig.username ?? '',
+      displayName: ig.name ?? page.name ?? null,
+      avatarUrl: ig.profile_picture_url ?? null,
+      followers: ig.followers_count ?? 0,
+      metadata: {
+        page_id: page.id,
+        page_name: page.name,
+        // Publishing uses the Page token, not the user token.
+        page_access_token: page.access_token,
+        login_mode: 'facebook_login',
+      },
+    };
+  }
+
+  private assertBusinessAccount(accountType?: string): void {
+    if (accountType && accountType !== 'BUSINESS') {
+      throw connectionError(
+        'instagram',
+        `Content publishing needs a Business account; this one is ${accountType}`,
+        'In the Instagram app: Settings → Account type and tools → Switch to professional account → Business.',
+      );
+    }
+  }
+
+  /** Publishing uses the Page token under Facebook Login. */
+  private publishToken(tokens: TokenSet, account: AccountInfo): string {
+    const pageToken = account.metadata?.page_access_token;
+    return typeof pageToken === 'string' && pageToken ? pageToken : tokens.accessToken;
+  }
+
+  /* ── Publishing ───────────────────────────────────────────────────────── */
+
+  async publish(
+    tokens: TokenSet,
+    account: AccountInfo,
+    input: PublishInput,
+  ): Promise<PublishResult> {
+    const token = this.publishToken(tokens, account);
+    const igId = account.externalId;
+
+    let creationId: string;
+    if (input.format === 'carousel') {
+      creationId = await this.createCarousel(igId, token, input);
+    } else {
+      creationId = await this.createSingleContainer(igId, token, input);
+    }
+
+    await this.waitForContainer(creationId, token);
+
+    const published = await this.json<any>(this.graph(`/${igId}/media_publish`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ creation_id: creationId, access_token: token }),
+    });
+
+    const mediaId = String(published.id);
+    const permalink = await this.fetchPermalink(mediaId, token);
+
+    log.info('published to instagram', { mediaId, format: input.format });
+    return { externalId: mediaId, permalink, raw: published };
+  }
+
+  private async createSingleContainer(
+    igId: string,
+    token: string,
+    input: PublishInput,
+  ): Promise<string> {
+    const params = new URLSearchParams({ caption: input.caption, access_token: token });
+
+    if (input.format === 'reel') {
+      const video = input.videoUrl ?? input.mediaUrls[0];
+      this.requireMedia(video, 'a video URL', 'Reel');
+      params.set('media_type', 'REELS');
+      params.set('video_url', video!);
+      if (input.coverUrl) params.set('cover_url', input.coverUrl);
+      params.set('share_to_feed', String(input.shareToFeed ?? true));
+    } else if (input.format === 'story') {
+      const media = input.videoUrl ?? input.mediaUrls[0];
+      this.requireMedia(media, 'an image or video URL', 'Story');
+      params.set('media_type', 'STORIES');
+      params.set(input.videoUrl ? 'video_url' : 'image_url', media!);
+      // Stories carry no caption.
+      params.delete('caption');
+    } else {
+      const image = input.mediaUrls[0];
+      this.requireMedia(image, 'an image URL', 'feed post');
+      params.set('image_url', image!);
+    }
+
+    const container = await this.json<any>(this.graph(`/${igId}/media`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params,
+    });
+    return String(container.id);
+  }
+
+  private async createCarousel(
+    igId: string,
+    token: string,
+    input: PublishInput,
+  ): Promise<string> {
+    if (input.mediaUrls.length < 2) {
+      throw new FullSendError('media_missing', 'A carousel needs at least two images', {
+        remedy: 'FullSend will regenerate the creative for this post.',
+      });
+    }
+    const children: string[] = [];
+    for (const url of input.mediaUrls.slice(0, 10)) {
+      const child = await this.json<any>(this.graph(`/${igId}/media`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          image_url: url,
+          is_carousel_item: 'true',
+          access_token: token,
+        }),
+      });
+      children.push(String(child.id));
+    }
+    const parent = await this.json<any>(this.graph(`/${igId}/media`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        media_type: 'CAROUSEL',
+        children: children.join(','),
+        caption: input.caption,
+        access_token: token,
+      }),
+    });
+    return String(parent.id);
+  }
+
+  private requireMedia(url: string | undefined | null, what: string, kind: string): void {
+    if (!url) {
+      throw new FullSendError('media_missing', `An Instagram ${kind} needs ${what}`, {
+        remedy:
+          'Media must be at a public HTTPS URL. Configure Supabase Storage so FullSend can host ' +
+          'generated creative.',
+      });
+    }
+  }
+
+  /** Meta transcodes asynchronously; publishing before FINISHED fails. */
+  private async waitForContainer(containerId: string, token: string): Promise<void> {
+    for (let attempt = 0; attempt < CONTAINER_POLL_ATTEMPTS; attempt++) {
+      const status = await this.json<any>(
+        this.graph(`/${containerId}`) +
+          '?' +
+          new URLSearchParams({ fields: 'status_code,status', access_token: token }),
+      );
+      const code = status.status_code;
+      if (code === 'FINISHED') return;
+      if (code === 'ERROR') {
+        throw new FullSendError('publish_failed', `Instagram rejected the media: ${status.status}`, {
+          remedy:
+            'Usually a media format problem. Check the video is MP4/H.264 and within the ' +
+            'Reels limits, then FullSend will retry.',
+          meta: { containerId, status: status.status },
+        });
+      }
+      if (code === 'EXPIRED') {
+        throw new FullSendError('publish_failed', 'The media container expired before publishing', {
+          retryable: true,
+          remedy: 'FullSend will rebuild the container and retry.',
+        });
+      }
+      await sleep(CONTAINER_POLL_INTERVAL_MS);
+    }
+    throw new FullSendError('publish_timeout', 'Instagram is still processing the media', {
+      retryable: true,
+      remedy: 'FullSend will check again shortly.',
+    });
+  }
+
+  private async fetchPermalink(mediaId: string, token: string): Promise<string | null> {
+    try {
+      const r = await this.json<any>(
+        this.graph(`/${mediaId}`) +
+          '?' +
+          new URLSearchParams({ fields: 'permalink', access_token: token }),
+      );
+      return r.permalink ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /* ── Insights ─────────────────────────────────────────────────────────── */
+
+  async getPostMetrics(
+    tokens: TokenSet,
+    account: AccountInfo,
+    externalId: string,
+  ): Promise<Partial<PostMetrics>> {
+    const token = this.publishToken(tokens, account);
+    // Metric availability varies by media type; ask broadly and map what returns.
+    const metrics = [
+      'reach',
+      'likes',
+      'comments',
+      'shares',
+      'saved',
+      'views',
+      'total_interactions',
+      'profile_visits',
+      'ig_reels_avg_watch_time',
+      'ig_reels_video_view_total_time',
+    ].join(',');
+
+    try {
+      const r = await this.json<any>(
+        this.graph(`/${externalId}/insights`) +
+          '?' +
+          new URLSearchParams({ metric: metrics, access_token: token }),
+      );
+      const out = emptyMetrics();
+      for (const entry of r.data ?? []) {
+        const value = Number(entry.values?.[0]?.value ?? entry.total_value?.value ?? 0);
+        switch (entry.name) {
+          case 'reach':
+            out.reach = value;
+            break;
+          case 'views':
+            out.views = value;
+            out.impressions = value;
+            break;
+          case 'likes':
+            out.likes = value;
+            break;
+          case 'comments':
+            out.comments = value;
+            break;
+          case 'shares':
+            out.shares = value;
+            break;
+          case 'saved':
+            out.saves = value;
+            break;
+          case 'profile_visits':
+            out.profile_visits = value;
+            break;
+          case 'ig_reels_video_view_total_time':
+            // Reported in milliseconds.
+            out.watch_time_seconds = Math.round(value / 1000);
+            break;
+        }
+      }
+      if (out.views > 0 && out.reach === 0) out.reach = out.views;
+      return out;
+    } catch (e) {
+      log.warn('instagram insights unavailable', { externalId, error: String(e) });
+      return {};
+    }
+  }
+
+  async getAccountMetrics(tokens: TokenSet, account: AccountInfo): Promise<Partial<PostMetrics>> {
+    const token = this.publishToken(tokens, account);
+    try {
+      const r = await this.json<any>(
+        this.graph(`/${account.externalId}/insights`) +
+          '?' +
+          new URLSearchParams({
+            metric: 'reach,profile_views,website_clicks,follower_count',
+            period: 'day',
+            metric_type: 'total_value',
+            access_token: token,
+          }),
+      );
+      const out: Partial<PostMetrics> = {};
+      for (const entry of r.data ?? []) {
+        const value = Number(entry.total_value?.value ?? entry.values?.[0]?.value ?? 0);
+        if (entry.name === 'reach') out.reach = value;
+        if (entry.name === 'profile_views') out.profile_visits = value;
+        if (entry.name === 'website_clicks') out.clicks = value;
+        if (entry.name === 'follower_count') out.follows = value;
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  /** Meta exposes the real remaining quota — use it rather than guessing. */
+  async getQuota(
+    tokens: TokenSet,
+    account: AccountInfo,
+  ): Promise<{ used: number; limit: number } | null> {
+    const token = this.publishToken(tokens, account);
+    try {
+      const r = await this.json<any>(
+        this.graph(`/${account.externalId}/content_publishing_limit`) +
+          '?' +
+          new URLSearchParams({ fields: 'config,quota_usage', access_token: token }),
+      );
+      const row = r.data?.[0];
+      if (!row) return null;
+      return { used: row.quota_usage ?? 0, limit: row.config?.quota_total ?? 100 };
+    } catch {
+      return null;
+    }
+  }
+
+  /* ── Plumbing ─────────────────────────────────────────────────────────── */
+
+  private assertConfigured(): void {
+    if (!this.configured) {
+      throw new FullSendError('platform_not_configured', 'Instagram is not configured', {
+        remedy:
+          'Add META_APP_ID and META_APP_SECRET, then complete the Instagram setup wizard in ' +
+          'FullSend → Accounts.',
+      });
+    }
+  }
+
+  private async json<T>(url: string, init?: RequestInit): Promise<T> {
+    const res = await fetch(url, init);
+    const text = await res.text();
+    let body: any;
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      body = { raw: text };
+    }
+
+    if (!res.ok || body.error) {
+      throw mapMetaError(body.error ?? { message: `HTTP ${res.status}` }, res.status);
+    }
+    return body as T;
+  }
+}
+
+/** Turns Meta's error codes into something a founder can act on. */
+export function mapMetaError(
+  error: { message?: string; code?: number; error_subcode?: number; type?: string },
+  status = 400,
+): FullSendError {
+  const message = error.message ?? 'Instagram request failed';
+  const code = error.code;
+
+  // 190: token invalid/expired. 102: session expired. 463: password changed.
+  if (code === 190 || code === 102 || code === 463 || status === 401) {
+    return connectionError(
+      'instagram',
+      'Your Instagram connection expired',
+      'Reconnect Instagram in FullSend → Accounts. Publishing resumes automatically once you do.',
+    );
+  }
+  // 10 / 200-299: missing permission.
+  if (code === 10 || (code !== undefined && code >= 200 && code <= 299)) {
+    return connectionError(
+      'instagram',
+      `Instagram denied this action: ${message}`,
+      'The instagram_business_content_publish permission is missing or not yet approved. ' +
+        'Check App Review status in the Meta dashboard.',
+    );
+  }
+  // 4 / 17 / 32 / 613: rate limiting.
+  if (code === 4 || code === 17 || code === 32 || code === 613 || status === 429) {
+    return new FullSendError('rate_limited', 'Instagram rate limit reached', {
+      status: 429,
+      retryable: true,
+      remedy: 'FullSend will space out the next publish and retry.',
+    });
+  }
+  // 9: publishing limit (100 per 24h).
+  if (code === 9) {
+    return new FullSendError('quota_exhausted', 'Instagram daily publishing limit reached', {
+      status: 429,
+      retryable: true,
+      remedy: 'Instagram allows 100 API posts per 24 hours. FullSend will publish this tomorrow.',
+    });
+  }
+  if (code === 100) {
+    return new FullSendError('publish_failed', `Instagram rejected the request: ${message}`, {
+      remedy: 'Usually a media URL or format problem. Check the creative and retry.',
+    });
+  }
+  return new FullSendError('platform_error', `Instagram error: ${message}`, {
+    retryable: status >= 500,
+    meta: { code, subcode: error.error_subcode },
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+export function instagramFormatSupported(format: ContentFormat): boolean {
+  return ['reel', 'carousel', 'static', 'story'].includes(format);
+}

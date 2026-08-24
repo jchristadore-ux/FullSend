@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="1024" height="1024" role="img" aria-label="FullSend">
+<title>FullSend</title>
+<defs>
+  <linearGradient id="fsIconBg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#141618"/>
+    <stop offset="100%" stop-color="#08090A"/>
+  </linearGradient>
+</defs>
+<rect width="512" height="512" rx="114" fill="url(#fsIconBg)"/>
+<g transform="translate(102 102) scale(3.08)"><path d="M20 18 L46 50 L20 82 L38 82 L64 50 L38 18 Z" fill="#FFFFFF" opacity="0.55"/><path d="M52 18 L78 50 L52 82 L70 82 L96 50 L70 18 Z" fill="#FF5A1F"/></g>
+</svg>
