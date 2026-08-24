@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" width="1200" height="760">
+<rect width="1200" height="380" fill="#08090A"/>
+<rect y="380" width="1200" height="380" fill="#FFFFFF"/>
+<g transform="translate(60 70) scale(0.95)">
+<title>FullSend</title>
+<g transform="translate(8 12)"><path d="M6 26 L26 50 L6 74 L18 74 L38 50 L18 26 Z" fill="#FFFFFF" opacity="0.30"/><path d="M33 20 L58 50 L33 80 L49 80 L74 50 L49 20 Z" fill="#FFFFFF" opacity="0.62"/><path d="M64 14 L94 50 L64 86 L84 86 L114 50 L84 14 Z" fill="#FF5A1F"/></g>
+<g transform="translate(150 34) scale(1.62)"><rect x="0" y="0" width="5" height="26" fill="#FFFFFF"/><rect x="5" y="0" width="12" height="5" fill="#FFFFFF"/><rect x="5" y="10.5" width="10" height="5" fill="#FFFFFF"/><rect x="21" y="0" width="5" height="21" fill="#FFFFFF"/><rect x="33" y="0" width="5" height="21" fill="#FFFFFF"/><rect x="21" y="21" width="17" height="5" fill="#FFFFFF"/><rect x="42" y="0" width="5" height="26" fill="#FFFFFF"/><rect x="47" y="21" width="11" height="5" fill="#FFFFFF"/><rect x="62" y="0" width="5" height="26" fill="#FFFFFF"/><rect x="67" y="21" width="11" height="5" fill="#FFFFFF"/><rect x="86" y="0" width="17" height="5" fill="#FF5A1F"/><rect x="86" y="5" width="5" height="6" fill="#FF5A1F"/><rect x="86" y="10.5" width="17" height="5" fill="#FF5A1F"/><rect x="98" y="15.5" width="5" height="6" fill="#FF5A1F"/><rect x="86" y="21" width="17" height="5" fill="#FF5A1F"/><rect x="107" y="0" width="5" height="26" fill="#FF5A1F"/><rect x="112" y="0" width="12" height="5" fill="#FF5A1F"/><rect x="112" y="10.5" width="10" height="5" fill="#FF5A1F"/><rect x="112" y="21" width="12" height="5" fill="#FF5A1F"/><rect x="128" y="0" width="5" height="26" fill="#FF5A1F"/><rect x="140" y="0" width="5" height="26" fill="#FF5A1F"/><path d="M133 0 L140 0 L140 26 L133 26 Z" fill="#FF5A1F" opacity="0"/><path d="M133 0 L140 17 L140 26 L133 9 Z" fill="#FF5A1F"/><rect x="149" y="0" width="5" height="26" fill="#FF5A1F"/><rect x="154" y="0" width="8" height="5" fill="#FF5A1F"/><rect x="154" y="21" width="8" height="5" fill="#FF5A1F"/><rect x="161" y="3" width="5" height="20" fill="#FF5A1F"/><path d="M161 2 L166 6 L166 3 Z" fill="#FF5A1F"/></g>
+</g>
+<g transform="translate(60 450) scale(0.95)">
+<title>FullSend</title>
+<g transform="translate(8 12)"><path d="M6 26 L26 50 L6 74 L18 74 L38 50 L18 26 Z" fill="#08090A" opacity="0.30"/><path d="M33 20 L58 50 L33 80 L49 80 L74 50 L49 20 Z" fill="#08090A" opacity="0.62"/><path d="M64 14 L94 50 L64 86 L84 86 L114 50 L84 14 Z" fill="#FF5A1F"/></g>
+<g transform="translate(150 34) scale(1.62)"><rect x="0" y="0" width="5" height="26" fill="#08090A"/><rect x="5" y="0" width="12" height="5" fill="#08090A"/><rect x="5" y="10.5" width="10" height="5" fill="#08090A"/><rect x="21" y="0" width="5" height="21" fill="#08090A"/><rect x="33" y="0" width="5" height="21" fill="#08090A"/><rect x="21" y="21" width="17" height="5" fill="#08090A"/><rect x="42" y="0" width="5" height="26" fill="#08090A"/><rect x="47" y="21" width="11" height="5" fill="#08090A"/><rect x="62" y="0" width="5" height="26" fill="#08090A"/><rect x="67" y="21" width="11" height="5" fill="#08090A"/><rect x="86" y="0" width="17" height="5" fill="#FF5A1F"/><rect x="86" y="5" width="5" height="6" fill="#FF5A1F"/><rect x="86" y="10.5" width="17" height="5" fill="#FF5A1F"/><rect x="98" y="15.5" width="5" height="6" fill="#FF5A1F"/><rect x="86" y="21" width="17" height="5" fill="#FF5A1F"/><rect x="107" y="0" width="5" height="26" fill="#FF5A1F"/><rect x="112" y="0" width="12" height="5" fill="#FF5A1F"/><rect x="112" y="10.5" width="10" height="5" fill="#FF5A1F"/><rect x="112" y="21" width="12" height="5" fill="#FF5A1F"/><rect x="128" y="0" width="5" height="26" fill="#FF5A1F"/><rect x="140" y="0" width="5" height="26" fill="#FF5A1F"/><path d="M133 0 L140 0 L140 26 L133 26 Z" fill="#FF5A1F" opacity="0"/><path d="M133 0 L140 17 L140 26 L133 9 Z" fill="#FF5A1F"/><rect x="149" y="0" width="5" height="26" fill="#FF5A1F"/><rect x="154" y="0" width="8" height="5" fill="#FF5A1F"/><rect x="154" y="21" width="8" height="5" fill="#FF5A1F"/><rect x="161" y="3" width="5" height="20" fill="#FF5A1F"/><path d="M161 2 L166 6 L166 3 Z" fill="#FF5A1F"/></g>
+</g>
+<g transform="translate(60 210) scale(0.9)">
+<title>FullSend</title>
+<g transform="translate(2 10)"><path d="M6 26 L26 50 L6 74 L18 74 L38 50 L18 26 Z" fill="#FFFFFF" opacity="0.30"/><path d="M33 20 L58 50 L33 80 L49 80 L74 50 L49 20 Z" fill="#FFFFFF" opacity="0.62"/><path d="M64 14 L94 50 L64 86 L84 86 L114 50 L84 14 Z" fill="#FF5A1F"/></g>
+</g>
+<g transform="translate(200 228) scale(0.55)">
+<title>FullSend</title>
+<g transform="translate(2 10)"><path d="M20 18 L46 50 L20 82 L38 82 L64 50 L38 18 Z" fill="#FFFFFF" opacity="0.55"/><path d="M52 18 L78 50 L52 82 L70 82 L96 50 L70 18 Z" fill="#FF5A1F"/></g>
+</g>
+<g transform="translate(290 244) scale(0.3)">
+<title>FullSend</title>
+<g transform="translate(2 10)"><path d="M20 18 L46 50 L20 82 L38 82 L64 50 L38 18 Z" fill="#FFFFFF" opacity="0.55"/><path d="M52 18 L78 50 L52 82 L70 82 L96 50 L70 18 Z" fill="#FF5A1F"/></g>
+</g>
+<g transform="translate(340 250) scale(0.16)">
+<title>FullSend</title>
+<g transform="translate(2 10)"><path d="M20 18 L46 50 L20 82 L38 82 L64 50 L38 18 Z" fill="#FFFFFF" opacity="0.55"/><path d="M52 18 L78 50 L52 82 L70 82 L96 50 L70 18 Z" fill="#FF5A1F"/></g>
+</g>
+<g transform="translate(60 590) scale(0.9)">
+<title>FullSend</title>
+<g transform="translate(2 10)"><path d="M6 26 L26 50 L6 74 L18 74 L38 50 L18 26 Z" fill="#08090A" opacity="0.30"/><path d="M33 20 L58 50 L33 80 L49 80 L74 50 L49 20 Z" fill="#08090A" opacity="0.62"/><path d="M64 14 L94 50 L64 86 L84 86 L114 50 L84 14 Z" fill="#FF5A1F"/></g>
+</g>
+<g transform="translate(200 608) scale(0.55)">
+<title>FullSend</title>
+<g transform="translate(2 10)"><path d="M20 18 L46 50 L20 82 L38 82 L64 50 L38 18 Z" fill="#08090A" opacity="0.55"/><path d="M52 18 L78 50 L52 82 L70 82 L96 50 L70 18 Z" fill="#FF5A1F"/></g>
+</g>
+<g transform="translate(290 624) scale(0.3)">
+<title>FullSend</title>
+<g transform="translate(2 10)"><path d="M20 18 L46 50 L20 82 L38 82 L64 50 L38 18 Z" fill="#08090A" opacity="0.55"/><path d="M52 18 L78 50 L52 82 L70 82 L96 50 L70 18 Z" fill="#FF5A1F"/></g>
+</g>
+<g transform="translate(340 630) scale(0.16)">
+<title>FullSend</title>
+<g transform="translate(2 10)"><path d="M20 18 L46 50 L20 82 L38 82 L64 50 L38 18 Z" fill="#08090A" opacity="0.55"/><path d="M52 18 L78 50 L52 82 L70 82 L96 50 L70 18 Z" fill="#FF5A1F"/></g>
+</g>
+</svg>

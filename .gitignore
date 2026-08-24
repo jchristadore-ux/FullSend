@@ -1,0 +1,14 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+.env
+.env.local
+.env*.local
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+coverage/
+.DS_Store
+.fullsend-cache/

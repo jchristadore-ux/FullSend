@@ -1,0 +1,141 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  color-scheme: dark;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-void text-mist font-sans antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: #ff5a1f;
+    color: #08090a;
+  }
+
+  /* The command centre never shows a soft scrollbar. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0c0d0f;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #26292e;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a3f46;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-display tracking-tightest;
+  }
+
+  input,
+  textarea,
+  select {
+    @apply bg-charcoal border border-edge text-mist rounded px-3 py-2 outline-none;
+  }
+  input:focus,
+  textarea:focus,
+  select:focus {
+    @apply border-orange;
+    box-shadow: 0 0 0 3px rgba(255, 90, 31, 0.16);
+  }
+}
+
+@layer components {
+  /* The primary action. Square, loud, unmistakable. */
+  .btn-send {
+    @apply inline-flex items-center justify-center gap-2 bg-orange text-void font-display font-extrabold
+           uppercase tracking-tight px-6 py-3 rounded-sm transition-all duration-150
+           hover:bg-orange-bright active:translate-y-px
+           disabled:opacity-40 disabled:pointer-events-none;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 border border-edge text-mist font-display
+           font-bold uppercase tracking-tight px-6 py-3 rounded-sm transition-colors duration-150
+           hover:border-orange hover:text-orange disabled:opacity-40 disabled:pointer-events-none;
+  }
+
+  .btn-quiet {
+    @apply inline-flex items-center gap-1.5 text-dim hover:text-mist text-sm transition-colors;
+  }
+
+  .panel {
+    @apply bg-charcoal border border-edge rounded-md;
+  }
+
+  .panel-raised {
+    @apply bg-charcoal-raised border border-edge rounded-md;
+  }
+
+  .label {
+    @apply text-[11px] font-mono uppercase tracking-[0.16em] text-dimmer;
+  }
+
+  .stat {
+    @apply font-display font-extrabold tracking-crush tabular-nums;
+  }
+
+  .hairline {
+    @apply border-t border-edge;
+  }
+
+  /* Live status dot with the pulse that says "this thing is running". */
+  .dot-live {
+    @apply inline-block w-2 h-2 rounded-full bg-live;
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+    animation: dot-live-pulse 2s infinite;
+  }
+}
+
+@keyframes dot-live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+/* Grid backdrop used behind hero and command-centre surfaces. */
+.grid-backdrop {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+  background-size: 56px 56px;
+}
+
+.orange-bloom {
+  background: radial-gradient(60% 55% at 50% 0%, rgba(255, 90, 31, 0.18) 0%, transparent 70%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
