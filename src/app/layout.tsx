@@ -1,9 +1,12 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { FULLSEND_TAGLINES } from '@/lib/brand/fullsend-brand';
+import { env } from '@/lib/env';
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'),
+  // env.appUrl looks the variable up by computed key, so it is not frozen into
+  // the bundle at build time the way a direct process.env.NEXT_PUBLIC_ read is.
+  metadataBase: new URL(env.appUrl),
   title: {
     default: 'FullSend — Everything goes live.',
     template: '%s · FullSend',
