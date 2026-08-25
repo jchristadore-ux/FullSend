@@ -15,6 +15,22 @@ import { systemScope, type TenantScope } from '../db';
 import type { Uuid } from '../types';
 import { cacheKey, isCacheable, readCache, writeCache } from './cache';
 import { DeterministicProvider } from './deterministic-provider';
+/*
+ * Imported statically, not require()d on demand.
+ *
+ * These were loaded lazily to keep an unused vendor SDK out of the bundle, but
+ * `require` of an ES module goes through an interop that does not reliably
+ * carry named exports — the binding arrives undefined and `new` on it fails
+ * with "X is not a constructor". The `as typeof import(...)` cast made it look
+ * checked while telling the compiler nothing about what actually came back.
+ *
+ * There is nothing to save anyway: both SDKs are in serverExternalPackages, so
+ * they are required natively at runtime rather than bundled, and this module is
+ * server-only. Importing the wrapper eagerly costs nothing, and neither
+ * constructor touches its SDK — that client is built on first use.
+ */
+import { AnthropicProvider } from './anthropic-provider';
+import { OpenAiProvider } from './openai-provider';
 import type { AiProvider, CompletionRequest, CompletionResponse, ModelTier } from './types';
 
 const log = logger('ai');
@@ -24,19 +40,12 @@ let cached: AiProvider | null = null;
 export function getProvider(): AiProvider {
   if (cached) return cached;
   switch (env.ai.provider) {
-    case 'anthropic': {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { AnthropicProvider } =
-        require('./anthropic-provider') as typeof import('./anthropic-provider');
+    case 'anthropic':
       cached = new AnthropicProvider();
       break;
-    }
-    case 'openai': {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { OpenAiProvider } = require('./openai-provider') as typeof import('./openai-provider');
+    case 'openai':
       cached = new OpenAiProvider();
       break;
-    }
     default:
       cached = new DeterministicProvider();
   }
