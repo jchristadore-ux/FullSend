@@ -1,0 +1,85 @@
+name: FullSend heartbeat
+
+# Drives FullSend's background jobs from GitHub Actions.
+#
+# Vercel's Hobby (free) plan only runs cron jobs once per day, which is not
+# often enough to publish posts on time. This workflow calls the same cron
+# endpoints on a tighter schedule, so the free tier behaves like the paid one.
+#
+# On Vercel Pro, `vercel.json` already handles this — you can disable this
+# workflow from the Actions tab.
+#
+# Setup (all in the browser, no terminal):
+#   Repo → Settings → Secrets and variables → Actions → New repository secret
+#     FULLSEND_URL     https://your-app.vercel.app
+#     FULLSEND_CRON_SECRET   the same value as CRON_SECRET in Vercel
+
+on:
+  schedule:
+    # Every 5 minutes: drain the job queue and publish anything due.
+    # (GitHub's minimum interval is 5 minutes, and it may run late under load.)
+    - cron: '*/5 * * * *'
+    # Once a day: the full autopilot loop.
+    - cron: '0 7 * * *'
+    # Mondays: the Weekly Send Report.
+    - cron: '0 8 * * 1'
+    # Every six hours: check platform connections and refresh tokens.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'Run one job now'
+        required: true
+        default: 'queue'
+        type: choice
+        options: [queue, publish, daily, weekly, health]
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    # Nothing here touches the repository.
+    permissions: {}
+    steps:
+      - name: Work out which jobs this run should trigger
+        id: plan
+        env:
+          CRON: ${{ github.event.schedule }}
+          MANUAL: ${{ inputs.job }}
+        run: |
+          if [ -n "$MANUAL" ]; then
+            echo "jobs=$MANUAL" >> "$GITHUB_OUTPUT"
+          else
+            case "$CRON" in
+              '*/5 * * * *')  echo "jobs=queue publish" >> "$GITHUB_OUTPUT" ;;
+              '0 7 * * *')    echo "jobs=daily"         >> "$GITHUB_OUTPUT" ;;
+              '0 8 * * 1')    echo "jobs=weekly"        >> "$GITHUB_OUTPUT" ;;
+              '0 */6 * * *')  echo "jobs=health"        >> "$GITHUB_OUTPUT" ;;
+              *)              echo "jobs=queue"         >> "$GITHUB_OUTPUT" ;;
+            esac
+          fi
+
+      - name: Call FullSend
+        env:
+          URL: ${{ secrets.FULLSEND_URL }}
+          SECRET: ${{ secrets.FULLSEND_CRON_SECRET }}
+          JOBS: ${{ steps.plan.outputs.jobs }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$SECRET" ]; then
+            echo "::error::Set the FULLSEND_URL and FULLSEND_CRON_SECRET repository secrets first."
+            exit 1
+          fi
+
+          failed=0
+          for job in $JOBS; do
+            echo "── $job"
+            # --fail-with-body so a non-2xx surfaces the API's own explanation.
+            if ! curl --silent --show-error --fail-with-body \
+                 --max-time 300 --retry 2 --retry-delay 10 \
+                 -H "Authorization: Bearer $SECRET" \
+                 "$URL/api/cron/$job"; then
+              echo "::error::$job failed"
+              failed=1
+            fi
+            echo
+          done
+          exit $failed
