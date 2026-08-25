@@ -473,6 +473,27 @@ Something has added a `crons` block back into `vercel.json`. The shipped file
 has none, precisely so free-tier deploys work — the schedule runs from GitHub
 Actions instead. Remove the block, or upgrade to Pro if you want native crons.
 
+**Vercel says "Deployment has failed" with no reason on the pull request**
+
+The one-line status on GitHub never carries the cause. The build log does, and
+you can read it from a phone: **vercel.com** → your project → **Deployments** →
+tap the failed one → **Build Logs**. Scroll to the first red line — everything
+below it is fallout. Copy that line; it names the fix.
+
+Two causes worth ruling out before reading anything else:
+
+- **Node.js version.** `package.json` pins `engines.node` to `22.x`, the form
+  Vercel documents. A range like `>=20` is not always accepted and can fail the
+  build outright with *Found invalid Node.js Version*. If your project's
+  **Settings → General → Node.js Version** is set to 18.x, raise it — Next.js 16
+  needs 20 or newer, and Node 20 itself is deprecated on Vercel from October
+  2026.
+- **Two projects on one repository.** If you imported this repo twice, every
+  push builds twice and the pull request shows two statuses that can disagree.
+  Delete the one you are not using: **Settings → General →** scroll to the
+  bottom → **Delete Project**. The other keeps working, and its URL does not
+  change.
+
 **Data disappeared after a restart**
 You are on the in-memory store. Add the Supabase variables and run the
 migration. Settings shows which driver is active.
