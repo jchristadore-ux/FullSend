@@ -11,6 +11,34 @@ import { useState } from 'react';
 /** What failed, and the next step — kept apart so neither hides the other. */
 type SignInError = { message: string; remedy: string | null };
 
+const asText = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+
+/**
+ * The response was not FullSend's — the host answered for us. Say what the
+ * status actually means, because "Unexpected token '<'" sends people looking
+ * at their own typing instead of at the runtime log that holds the answer.
+ */
+function hostingError(status: number): SignInError {
+  if (status === 504 || status === 408) {
+    return {
+      message: `Sign-in timed out (${status}).`,
+      remedy:
+        'Supabase took too long to send the email — usually its built-in mailer stalling. Add SMTP under Authentication → Emails, and check your hosting runtime logs.',
+    };
+  }
+  if (status === 401 || status === 403) {
+    return {
+      message: `The host refused the request (${status}).`,
+      remedy:
+        'Deployment protection is probably in front of this deployment. Open the production URL, or turn off protection for it.',
+    };
+  }
+  return {
+    message: `The server returned an error page instead of a response (${status}).`,
+    remedy: 'Your hosting runtime logs hold the actual error — on Vercel, Project → Logs.',
+  };
+}
+
 export function LoginForm({
   mode,
   next,
@@ -53,19 +81,33 @@ export function LoginForm({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, next }),
       });
-      const json = await res.json();
+      // Not every response is ours. A platform that kills or times out the
+      // function answers with its own HTML error page, and parsing that as
+      // JSON turns a diagnosable outage into "Unexpected token '<'".
+      const raw = await res.text();
+      let json: Record<string, unknown>;
+      try {
+        json = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        setError(hostingError(res.status));
+        return;
+      }
+
       if (!res.ok) {
         // The message says what went wrong; the remedy says what to do about
         // it. Showing only the remedy hides the cause — and the cause is
         // usually a Supabase setting, not the address that was typed.
-        setError({ message: json.message ?? 'Could not sign in', remedy: json.remedy ?? null });
+        setError({
+          message: asText(json.message) ?? 'Could not sign in',
+          remedy: asText(json.remedy),
+        });
         return;
       }
 
       if (json.magicLink) {
         setSent(true);
       } else {
-        router.push(json.next ?? next);
+        router.push(asText(json.next) ?? next);
         router.refresh();
       }
     } catch (e) {
