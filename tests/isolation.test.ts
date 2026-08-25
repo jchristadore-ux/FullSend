@@ -17,6 +17,8 @@ import { FULLSEND_VOICE } from '@/lib/brand/fullsend-brand';
 import { runQualityControl } from '@/lib/qc/check';
 import { signInRemedy } from '@/lib/auth/signin-errors';
 import { isSchemaMissing } from '@/lib/db/supabase-store';
+import { failureRemedy } from '@/lib/jobs/failure-remedy';
+import { isBillingFailure, providerMessage } from '@/lib/ai/provider-errors';
 import { fullsendLockupSvg, fullsendIconSvg, fullsendFaviconSvg } from '@/lib/brand/logo';
 import type { Project, User } from '@/lib/types';
 
@@ -461,5 +463,54 @@ describe('a database with no schema in it', () => {
     expect(isSchemaMissing({ code: '57014', message: 'canceling statement due to statement timeout' })).toBe(false);
     expect(isSchemaMissing({ code: '23505', message: 'duplicate key value violates unique constraint' })).toBe(false);
     expect(isSchemaMissing({})).toBe(false);
+  });
+});
+
+describe('what a failed job tells the founder to do', () => {
+  // Verbatim from a real deployment, envelope and all.
+  const REAL = String.raw`Anthropic API error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}`;
+
+  it('sends an out-of-credit account to billing, not to their repository', () => {
+    const remedy = failureRemedy(REAL);
+    expect(remedy).toMatch(/credit/i);
+    expect(remedy).toMatch(/billing/i);
+    expect(remedy).not.toMatch(/repository is public/i);
+  });
+
+  it('still points at the repository when the repository is the problem', () => {
+    expect(failureRemedy('GitHub 404: could not find the repository')).toMatch(/public/i);
+  });
+
+  it('separates a rejected key from an empty balance', () => {
+    expect(failureRemedy('The Anthropic API key was rejected')).toMatch(/ANTHROPIC_API_KEY/);
+    expect(failureRemedy('The Anthropic API key was rejected')).not.toMatch(/credit/i);
+  });
+
+  it('names the migration when the schema is missing', () => {
+    expect(failureRemedy('The `projects` table does not exist')).toMatch(/0001_fullsend_init/);
+  });
+
+  it('always gives somewhere to look for anything unrecognised', () => {
+    expect(failureRemedy('something nobody has seen before')).toMatch(/admin/i);
+  });
+});
+
+describe('reading a vendor API failure', () => {
+  it('pulls the sentence out of the JSON envelope', () => {
+    const e = {
+      message: '400 {"type":"error","error":{"message":"Your credit balance is too low"}}',
+      error: { type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low' } },
+    };
+    expect(providerMessage(e)).toBe('Your credit balance is too low');
+  });
+
+  it('falls back to the envelope, without the status code, when there is no body', () => {
+    expect(providerMessage({ message: '503 Service Unavailable' })).toBe('Service Unavailable');
+  });
+
+  it('recognises a billing failure from either vendor', () => {
+    expect(isBillingFailure('Your credit balance is too low')).toBe(true);
+    expect(isBillingFailure('You exceeded your current quota, please check your plan')).toBe(true);
+    expect(isBillingFailure('overloaded_error')).toBe(false);
   });
 });

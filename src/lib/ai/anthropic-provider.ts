@@ -2,6 +2,7 @@ import 'server-only';
 import Anthropic from '@anthropic-ai/sdk';
 import { env } from '../env';
 import { FullSendError } from '../errors';
+import { isBillingFailure, providerMessage } from './provider-errors';
 import { ANTHROPIC_MODELS, estimateCost } from './pricing';
 import type { AiProvider, CompletionRequest, CompletionResponse, ModelTier } from './types';
 
@@ -120,9 +121,28 @@ export class AnthropicProvider implements AiProvider {
       });
     }
     if (e instanceof Anthropic.APIError) {
-      return new FullSendError('ai_error', `Anthropic API error: ${e.message}`, {
-        retryable: (e.status ?? 500) >= 500,
-        remedy: 'FullSend will retry. If it persists, check the Anthropic status page.',
+      const message = providerMessage(e);
+
+      // An empty balance is not a temporary fault, and no amount of retrying
+      // adds credit. It arrives as a 400 like any other rejected request, so
+      // without this it would be reported as something to wait out.
+      if (isBillingFailure(message)) {
+        return new FullSendError('ai_billing', 'Your Anthropic account is out of credit', {
+          status: e.status,
+          retryable: false,
+          remedy:
+            'Add credit at console.anthropic.com → Plans & Billing. Everything FullSend has already made is kept, and generation resumes once there is a balance.',
+          meta: { model, status: e.status },
+          cause: e,
+        });
+      }
+
+      const retryable = (e.status ?? 500) >= 500;
+      return new FullSendError('ai_error', `Anthropic API error: ${message}`, {
+        retryable,
+        remedy: retryable
+          ? 'FullSend will retry. If it persists, check the Anthropic status page.'
+          : 'Anthropic rejected the request rather than failing temporarily, so retrying will not help. The message above is theirs.',
         meta: { model, status: e.status },
         cause: e,
       });
