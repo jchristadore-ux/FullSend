@@ -533,11 +533,22 @@ setting that fixes it. The usual three:
 **Authentication → Logs → Auth Logs** in Supabase shows the underlying failure
 for anything else.
 
-**The sign-in link goes to localhost**
+**The sign-in link goes to localhost, or to `/?code=…`**
+
+Supabase builds the link from its own **Site URL**, and only honours the
+callback address FullSend asks for when that exact address is on its **Redirect
+URLs** list. Miss either and the code is delivered somewhere nothing is
+listening.
 
 **Authentication → URL Configuration**: set **Site URL** to your real domain and
-add `https://your-app.vercel.app/api/auth/callback` to **Redirect URLs**. See
-[step 1](#step-1--set-up-the-database).
+add `https://your-app.vercel.app/api/auth/callback` to **Redirect URLs**
+(`https://your-app.vercel.app/**` covers it and everything after). See
+[step 1](#step-1--set-up-the-database). Then request a fresh link — the code in
+the old one is single-use.
+
+If the code arrives at your site root rather than localhost, FullSend forwards
+it to the callback itself and you are signed in anyway. Fix the setting even so:
+that rescue cannot work when the link points at a machine that is not yours.
 
 **Data disappeared after a restart**
 You are on the in-memory store. Add the Supabase variables and run the
