@@ -27,10 +27,23 @@ export function supabaseConfigured(): boolean {
   return Boolean(env.supabase.url && env.supabase.anonKey);
 }
 
+/*
+ * Serverless hosts kill a function that runs too long and answer with their
+ * own error page, which is HTML — so a slow Supabase call does not surface as
+ * a Supabase problem, it surfaces as a parse error with no cause attached.
+ * Failing first, on our own terms, keeps the explanation ours. Sending a magic
+ * link waits on Supabase's mailer, which is the part that stalls.
+ */
+const SUPABASE_TIMEOUT_MS = 8000;
+
+const timeoutFetch: typeof fetch = (input, init) =>
+  fetch(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(SUPABASE_TIMEOUT_MS) });
+
 /** Server-side Supabase client bound to the request's cookies. */
 export async function getSupabaseServerClient() {
   const cookieStore = await cookies();
   return createServerClient(env.supabase.url!, env.supabase.anonKey!, {
+    global: { fetch: timeoutFetch },
     cookies: {
       getAll: () => cookieStore.getAll(),
       setAll: (toSet) => {

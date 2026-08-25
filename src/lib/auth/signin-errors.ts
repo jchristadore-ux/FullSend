@@ -11,6 +11,17 @@
 export function signInRemedy(message: string): string | null {
   const m = message.toLowerCase();
 
+  // We gave up on Supabase before the host gave up on us. Almost always the
+  // built-in mailer, which has no delivery guarantee and no hurry.
+  if (m.includes('timeout') || m.includes('aborted') || m.includes('timed out')) {
+    return 'Supabase did not respond in time — usually its built-in email sender stalling. Add your own under Authentication → Emails → SMTP Settings, and check Logs → Auth Logs.';
+  }
+
+  // The request never reached Supabase at all.
+  if (m.includes('fetch failed') || m.includes('network') || m.includes('enotfound')) {
+    return 'Could not reach Supabase. Check that NEXT_PUBLIC_SUPABASE_URL is your real project URL and that the project is not paused.';
+  }
+
   // Signups are off, so an unknown address cannot be created on first sign-in.
   if (m.includes('signups not allowed') || m.includes('signup is disabled')) {
     return 'Supabase → Authentication → Sign In / Providers → Email → turn on "Allow new users to sign up". Or invite this address under Authentication → Users first.';

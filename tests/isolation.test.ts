@@ -432,6 +432,12 @@ describe('sign-in failures', () => {
     );
   });
 
+  it('points at the host, not the address, when the platform answers for us', () => {
+    expect(signInRemedy('The operation was aborted due to timeout')).toMatch(/smtp|did not respond/i);
+    expect(signInRemedy('fetch failed')).toMatch(/could not reach supabase/i);
+    expect(signInRemedy('fetch failed')).not.toMatch(/check the address/i);
+  });
+
   it('always gives somewhere to look, even for a message it has never seen', () => {
     const remedy = signInRemedy('some entirely new failure mode');
     expect(remedy).toBeTruthy();
