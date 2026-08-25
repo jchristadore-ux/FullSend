@@ -20,6 +20,12 @@ import {
   type TenantScope,
 } from './store';
 
+/** A tenant restriction as plain data, so it never travels as a query builder. */
+type ScopeFilter =
+  | { kind: 'unrestricted' }
+  | { kind: 'eq'; column: string; value: string }
+  | { kind: 'in'; column: string; values: string[] };
+
 /**
  * True when the database answered "that table isn't there" — the signature of
  * a project whose migration has never been run.
@@ -99,25 +105,46 @@ export class SupabaseStore implements Store {
     if (owner !== scope.userId) throw forbidden();
   }
 
-  /** Applies the tenant predicate to a select/update/delete builder. */
-  private async scopeQuery(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    query: any,
-    scope: TenantScope,
-    table: TableName,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ): Promise<any> {
-    if (scope.kind === 'system') return query;
+  /*
+   * Resolving the tenant restriction and applying it are deliberately two
+   * steps, and the split is load-bearing.
+   *
+   * A PostgREST query builder is a thenable. Returning one from an `async`
+   * function hands it to Promise.resolve, which assimilates any thenable by
+   * calling its `then` — so the query executes then and there, and the caller
+   * receives a `{ data, error }` response where it expected a builder it could
+   * keep chaining. It fails only against a real Supabase, on the next `.eq()`
+   * or `.maybeSingle()`, with a TypeError that says nothing about the cause.
+   *
+   * Resolving returns plain data. Applying is synchronous. No builder ever
+   * passes through an await, so the hazard cannot recur here.
+   */
+  private async scopeFilter(scope: TenantScope, table: TableName): Promise<ScopeFilter> {
+    if (scope.kind === 'system') return { kind: 'unrestricted' };
+
     const key = TENANT_KEY[table];
-    if (key === 'user_id') return query.eq('user_id', scope.userId);
+    if (key === 'user_id') return { kind: 'eq', column: 'user_id', value: scope.userId };
     if (key === 'none') {
-      if (table === 'users') return query.eq('id', scope.userId);
-      return query;
+      return table === 'users'
+        ? { kind: 'eq', column: 'id', value: scope.userId }
+        : { kind: 'unrestricted' };
     }
+
     const ids = await this.accessibleProjectIds(scope);
-    if (ids === 'all') return query;
+    if (ids === 'all') return { kind: 'unrestricted' };
     // An empty tenant returns nothing rather than everything.
-    return query.in('project_id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000']);
+    return {
+      kind: 'in',
+      column: 'project_id',
+      values: ids.length ? ids : ['00000000-0000-0000-0000-000000000000'],
+    };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private applyScope(query: any, filter: ScopeFilter): any {
+    if (filter.kind === 'eq') return query.eq(filter.column, filter.value);
+    if (filter.kind === 'in') return query.in(filter.column, filter.values);
+    return query;
   }
 
   private wrap(error: { message: string; code?: string }, table: string): FullSendError {
@@ -177,7 +204,7 @@ export class SupabaseStore implements Store {
     id: Uuid,
   ): Promise<Tables[K] | null> {
     let q = this.client.from(table).select('*').eq('id', id);
-    q = await this.scopeQuery(q, scope, table);
+    q = this.applyScope(q, await this.scopeFilter(scope, table));
     const { data, error } = await q.maybeSingle();
     if (error) throw this.wrap(error, table);
     return (data as Tables[K]) ?? null;
@@ -189,7 +216,7 @@ export class SupabaseStore implements Store {
     options: QueryOptions<Tables[K]> = {},
   ): Promise<Tables[K][]> {
     let q = this.client.from(table).select('*');
-    q = await this.scopeQuery(q, scope, table);
+    q = this.applyScope(q, await this.scopeFilter(scope, table));
 
     const { where, whereIn, gte, lt, orderBy, direction = 'asc', limit, offset } = options;
     if (where) {
@@ -237,7 +264,7 @@ export class SupabaseStore implements Store {
       .from(table)
       .update(patch as Record<string, unknown>)
       .eq('id', id);
-    q = await this.scopeQuery(q, scope, table);
+    q = this.applyScope(q, await this.scopeFilter(scope, table));
     const { data, error } = await q.select().single();
     if (error) throw this.wrap(error, table);
     return data as Tables[K];
@@ -247,7 +274,7 @@ export class SupabaseStore implements Store {
     const existing = await this.get(scope, table, id);
     if (!existing) return;
     let q = this.client.from(table).delete().eq('id', id);
-    q = await this.scopeQuery(q, scope, table);
+    q = this.applyScope(q, await this.scopeFilter(scope, table));
     const { error } = await q;
     if (error) throw this.wrap(error, table);
   }
@@ -258,7 +285,7 @@ export class SupabaseStore implements Store {
     options: QueryOptions<Tables[K]> = {},
   ): Promise<number> {
     let q = this.client.from(table).select('id', { count: 'exact', head: true });
-    q = await this.scopeQuery(q, scope, table);
+    q = this.applyScope(q, await this.scopeFilter(scope, table));
     const { where } = options;
     if (where) {
       for (const [k, v] of Object.entries(where)) {
