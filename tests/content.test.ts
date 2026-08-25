@@ -6,6 +6,7 @@ import { generateContent } from '@/lib/content/generate';
 import { allocate, planSlots, shiftMix, formatFor } from '@/lib/content/mix';
 import { checkDuplicate, contentFingerprint, similarity } from '@/lib/content/dedup';
 import { openSlots } from '@/lib/scheduler/schedule';
+import { DeterministicProvider } from '@/lib/ai/deterministic-provider';
 import { runQualityControl, canAutoPublish } from '@/lib/qc/check';
 import { wrapText } from '@/lib/creative/render';
 import { buildVideoPackage } from '@/lib/video/package';
@@ -555,5 +556,72 @@ describe('quality control', () => {
     it('lets clean, non-promotional content through on Full Send', () => {
       expect(canAutoPublish(pass, 'full_send', 'education', true).allowed).toBe(true);
     });
+  });
+});
+
+describe('the deterministic composer and existing hooks', () => {
+  /** Drives the provider through its real public interface. */
+  async function compose(ctx: Record<string, unknown>): Promise<{ hook: string }[]> {
+    const res = await new DeterministicProvider().complete({
+      task: 'content.batch',
+      tier: 'standard',
+      system: '',
+      messages: [{ role: 'user', content: JSON.stringify({ context: ctx }) }],
+    });
+    return (JSON.parse(res.text) as { items: { hook: string }[] }).items;
+  }
+
+  it('does not re-tread a hook the caller says already exists', async () => {
+    const brief = {
+      seed: 'p:2026-01-01T10:00:00.000Z:instagram',
+      platform: 'instagram',
+      format: 'reel',
+      pillar_type: 'education',
+      pillar_name: 'Education',
+      topic: 'task extraction',
+      scheduled_for: '2026-01-01T10:00:00.000Z',
+    };
+    const ctx = { project_name: 'Taskflow', analysis: { category: 'productivity', features: [], screens: [] }, brand: {}, briefs: [brief] };
+
+    const first = (await compose(ctx))[0].hook;
+
+    // Same slot, same seed — but now that hook is spoken for.
+    const second = (await compose({ ...ctx, existing_hooks: [first] }))[0].hook;
+
+    expect(second).not.toBe(first);
+    expect(second.length).toBeGreaterThan(0);
+  });
+
+  it('does not repeat a hook within a single batch', async () => {
+    const briefs = Array.from({ length: 4 }, (_, i) => ({
+      seed: `p:2026-01-0${i + 1}T10:00:00.000Z:instagram`,
+      platform: 'instagram',
+      format: 'reel',
+      pillar_type: 'education',
+      pillar_name: 'Education',
+      topic: 'task extraction',
+      scheduled_for: `2026-01-0${i + 1}T10:00:00.000Z`,
+    }));
+    const items = await compose({
+      project_name: 'Taskflow',
+      analysis: { category: 'productivity', features: [], screens: [] },
+      brand: {},
+      briefs,
+    });
+
+    const hooks = items.map((i) => i.hook.toLowerCase());
+    expect(new Set(hooks).size).toBe(hooks.length);
+  });
+
+  it('stays stable for the same slot when nothing is used yet', async () => {
+    const ctx = {
+      project_name: 'Taskflow',
+      analysis: { category: 'productivity', features: [], screens: [] },
+      brand: {},
+      briefs: [{ seed: 'p:2026-03-03T09:00:00.000Z:tiktok', platform: 'tiktok', format: 'short_video', pillar_type: 'promotion', topic: 'exports', scheduled_for: '2026-03-03T09:00:00.000Z' }],
+    };
+    const a = (await compose(ctx))[0].hook;
+    const b = (await compose(ctx))[0].hook;
+    expect(a).toBe(b);
   });
 });
