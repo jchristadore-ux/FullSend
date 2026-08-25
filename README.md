@@ -118,6 +118,17 @@ and file storage). Both have free tiers that comfortably cover getting started.
    have to be able to reach them.
 4. From **Project Settings → API**, copy the project URL, the `anon` key and the
    `service_role` key.
+5. Under **Authentication → URL Configuration**, set **Site URL** to your
+   deployed domain and add `https://your-app.vercel.app/api/auth/callback` to
+   **Redirect URLs**. A new project only allows `localhost`, so without this the
+   sign-in link sends people to a machine that is not yours.
+6. Under **Authentication → Sign In / Providers → Email**, check that the Email
+   provider is on and **"Allow new users to sign up"** is enabled — otherwise
+   your own first sign-in is rejected, because the account does not exist yet.
+
+Supabase's built-in email sender is for testing: a couple of messages an hour,
+and no delivery guarantees. Before real users arrive, add your own under
+**Authentication → Emails → SMTP Settings**.
 
 ### Step 2 — Generate an encryption key
 
@@ -493,6 +504,28 @@ Two causes worth ruling out before reading anything else:
   Delete the one you are not using: **Settings → General →** scroll to the
   bottom → **Delete Project**. The other keeps working, and its URL does not
   change.
+
+**Sign-in fails, or the link never arrives**
+
+The sign-in screen shows Supabase's own wording for the failure, plus the
+setting that fixes it. The usual three:
+
+- *"Signups not allowed for otp"* — **Authentication → Sign In / Providers →
+  Email → Allow new users to sign up**. Your first sign-in creates the account,
+  so this has to be on at least once.
+- *"Error sending magic link email"* — Supabase's built-in sender gave up. Add
+  SMTP under **Authentication → Emails**.
+- *"email rate limit exceeded"* — the built-in sender allows only a few per
+  hour. Wait, or add SMTP.
+
+**Authentication → Logs → Auth Logs** in Supabase shows the underlying failure
+for anything else.
+
+**The sign-in link goes to localhost**
+
+**Authentication → URL Configuration**: set **Site URL** to your real domain and
+add `https://your-app.vercel.app/api/auth/callback` to **Redirect URLs**. See
+[step 1](#step-1--set-up-the-database).
 
 **Data disappeared after a restart**
 You are on the in-memory store. Add the Supabase variables and run the

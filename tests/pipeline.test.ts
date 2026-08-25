@@ -235,7 +235,9 @@ describe('FullSend end-to-end chain', () => {
     const after = await db().count(ctx.scope, 'content_items', {
       where: { project_id: project.id },
     });
-    expect(topUp.generated).toBeGreaterThan(0);
+    // The reason is the assertion message: a bare "expected 0 to be greater
+    // than 0" in CI says nothing about which of the top-up guards fired.
+    expect(topUp.generated, topUp.reason).toBeGreaterThan(0);
     expect(after).toBeGreaterThan(before);
 
     /* 14. Cost was tracked throughout. */

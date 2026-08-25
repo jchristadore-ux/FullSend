@@ -10,6 +10,7 @@ import {
   getSupabaseServerClient,
   supabaseConfigured,
 } from '@/lib/auth/session';
+import { signInRemedy } from '@/lib/auth/signin-errors';
 import { audit } from '@/lib/db/repo';
 import { systemScope } from '@/lib/db';
 
@@ -43,9 +44,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         options: { emailRedirectTo: `${env.appUrl}/api/auth/callback?next=${encodeURIComponent(safeNext)}` },
       });
       if (error) {
+        // Supabase's own wording is the only thing that identifies the cause,
+        // so it is what the founder sees. The remedy names the setting.
         throw new FullSendError('auth_failed', error.message, {
           status: 400,
-          remedy: 'Check the address and try again.',
+          remedy: signInRemedy(error.message),
         });
       }
       return NextResponse.json({ magicLink: true });

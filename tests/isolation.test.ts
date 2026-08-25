@@ -15,6 +15,7 @@ import { check, LIMITS, remaining, resetLimits } from '@/lib/rate-limit';
 import { extractJson } from '@/lib/ai/client';
 import { FULLSEND_VOICE } from '@/lib/brand/fullsend-brand';
 import { runQualityControl } from '@/lib/qc/check';
+import { signInRemedy } from '@/lib/auth/signin-errors';
 import { fullsendLockupSvg, fullsendIconSvg, fullsendFaviconSvg } from '@/lib/brand/logo';
 import type { Project, User } from '@/lib/types';
 
@@ -402,5 +403,38 @@ describe('the FullSend mark', () => {
   it('carries the electric orange in colour variants and drops it in monochrome', () => {
     expect(fullsendLockupSvg({ tone: 'dark' })).toContain('#FF5A1F');
     expect(fullsendLockupSvg({ tone: 'mono-black' })).not.toContain('#FF5A1F');
+  });
+});
+
+describe('sign-in failures', () => {
+  it('never blames the address for a Supabase project setting', () => {
+    const notTheAddress = [
+      'Signups not allowed for otp',
+      'Email logins are disabled',
+      'Error sending magic link email',
+      'email rate limit exceeded',
+    ];
+    for (const message of notTheAddress) {
+      expect(signInRemedy(message)).not.toMatch(/check the address/i);
+    }
+  });
+
+  it('names the setting that actually needs changing', () => {
+    expect(signInRemedy('Signups not allowed for otp')).toMatch(/allow new users to sign up/i);
+    expect(signInRemedy('Error sending magic link email')).toMatch(/smtp/i);
+    expect(signInRemedy('email rate limit exceeded')).toMatch(/rate-limiting/i);
+    expect(signInRemedy('Redirect URL not allowed for this instance')).toMatch(/redirect urls/i);
+  });
+
+  it('does blame the address when the address is genuinely invalid', () => {
+    expect(signInRemedy('Unable to validate email address: invalid format')).toMatch(
+      /check the address/i,
+    );
+  });
+
+  it('always gives somewhere to look, even for a message it has never seen', () => {
+    const remedy = signInRemedy('some entirely new failure mode');
+    expect(remedy).toBeTruthy();
+    expect(remedy).toMatch(/auth logs/i);
   });
 });

@@ -8,6 +8,9 @@ import { useState } from 'react';
  * FullSend); a local dev session otherwise so the product runs before anyone
  * has provisioned a database.
  */
+/** What failed, and the next step — kept apart so neither hides the other. */
+type SignInError = { message: string; remedy: string | null };
+
 export function LoginForm({
   mode,
   next,
@@ -21,7 +24,9 @@ export function LoginForm({
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
-  const [error, setError] = useState<string | null>(initialError);
+  const [error, setError] = useState<SignInError | null>(
+    initialError ? { message: initialError, remedy: null } : null,
+  );
 
   if (mode === 'unavailable') {
     return (
@@ -49,7 +54,13 @@ export function LoginForm({
         body: JSON.stringify({ email, next }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.remedy ?? json.message ?? 'Could not sign in');
+      if (!res.ok) {
+        // The message says what went wrong; the remedy says what to do about
+        // it. Showing only the remedy hides the cause — and the cause is
+        // usually a Supabase setting, not the address that was typed.
+        setError({ message: json.message ?? 'Could not sign in', remedy: json.remedy ?? null });
+        return;
+      }
 
       if (json.magicLink) {
         setSent(true);
@@ -58,7 +69,7 @@ export function LoginForm({
         router.refresh();
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError({ message: e instanceof Error ? e.message : String(e), remedy: null });
     } finally {
       setBusy(false);
     }
@@ -95,7 +106,12 @@ export function LoginForm({
         className="mt-2 w-full !py-3"
       />
 
-      {error && <p className="mt-3 text-sm text-fail">{error}</p>}
+      {error && (
+        <div className="mt-3">
+          <p className="text-sm text-fail">{error.message}</p>
+          {error.remedy && <p className="mt-1.5 text-sm text-dim">{error.remedy}</p>}
+        </div>
+      )}
 
       <button type="submit" disabled={busy || !email} className="btn-send mt-5 w-full">
         {busy ? 'SENDING…' : mode === 'supabase' ? 'EMAIL ME A LINK' : 'SIGN IN'}
