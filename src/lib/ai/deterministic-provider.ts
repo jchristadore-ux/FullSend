@@ -66,6 +66,15 @@ function pick<T>(arr: T[], seed: string): T {
   return arr[Math.floor(rand(seed) * arr.length) % arr.length];
 }
 
+/** Compares hooks the way a reader would: wording, not punctuation or case. */
+function normalizeHook(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function titleCase(s: string): string {
   return s
     .replace(/[-_]+/g, ' ')
@@ -600,6 +609,20 @@ function composeContentBatch(ctx: Ctx): unknown {
   const features: any[] = a.features ?? [];
   const screens: any[] = a.screens ?? [];
 
+  /*
+   * Hooks already used, so this batch does not re-tread them.
+   *
+   * The caller supplies these for exactly this purpose. Ignoring them is not a
+   * cosmetic failing: a top-up run derives its hooks from the same patterns as
+   * the original run, the deduplicator correctly rejects every one, and the
+   * autopilot reports "Nothing new passed the duplicate check" and produces
+   * nothing — a content machine that quietly stops, which is the failure mode
+   * it exists to prevent.
+   */
+  const used = new Set<string>(
+    (ctx.existing_hooks ?? []).map((h: string) => normalizeHook(h)),
+  );
+
   const items = briefs.map((brief, idx) => {
     const pillar: PillarType = brief.pillar_type ?? 'education';
     const platform: Platform = brief.platform ?? 'instagram';
@@ -614,11 +637,26 @@ function composeContentBatch(ctx: Ctx): unknown {
     const verb = verbFor(topic, a);
     const n = 3 + (Math.floor(rand(seed + 'n') * 4) % 5);
 
-    const hook = pick(HOOK_PATTERNS[pillar], seed + 'hook')
-      .replace('{topic}', String(topic).toLowerCase())
-      .replace('{product}', productName)
-      .replace('{verb}', verb)
-      .replace('{n}', String(n));
+    /*
+     * Start where the seed points, then walk the patterns for one that has not
+     * been used. Starting from the seed keeps output stable for a given slot;
+     * walking from there keeps a second pass over the same pillar from
+     * repeating the first. Every pattern taken means the calendar genuinely has
+     * no unused angle left for this pillar, so the last one stands and the
+     * deduplicator decides — a repeat is caught there, never shipped.
+     */
+    const patterns = HOOK_PATTERNS[pillar];
+    const start = patterns.indexOf(pick(patterns, seed + 'hook'));
+    let hook = '';
+    for (let step = 0; step < patterns.length; step++) {
+      hook = patterns[(start + step) % patterns.length]
+        .replace('{topic}', String(topic).toLowerCase())
+        .replace('{product}', productName)
+        .replace('{verb}', verb)
+        .replace('{n}', String(n));
+      if (!used.has(normalizeHook(hook))) break;
+    }
+    used.add(normalizeHook(hook));
 
     const persona = (ctx.personas ?? [])[idx % Math.max(1, (ctx.personas ?? []).length)];
     const cta = pick(brand.ctas?.length ? brand.ctas : ['Link in bio'], seed + 'cta');
