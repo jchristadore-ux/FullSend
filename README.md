@@ -505,6 +505,18 @@ Two causes worth ruling out before reading anything else:
   bottom → **Delete Project**. The other keeps working, and its URL does not
   change.
 
+**Start here: `/api/health`**
+
+`https://your-app.vercel.app/api/health` answers "is this configured, and can it
+reach what it needs" from any browser, including a phone. It reports which
+variables are set — never their values — and whether your deployed server can
+actually reach Supabase, which is a different question from whether *you* can.
+Anything wrong appears in `problems`.
+
+A `"Cannot reach Supabase from the server"` there means the failure is
+connectivity or a wrong project URL, not a Supabase setting, and no amount of
+changing Auth options will help.
+
 **Sign-in fails, or the link never arrives**
 
 The sign-in screen shows Supabase's own wording for the failure, plus the
