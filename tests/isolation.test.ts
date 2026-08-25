@@ -16,6 +16,8 @@ import { extractJson } from '@/lib/ai/client';
 import { FULLSEND_VOICE } from '@/lib/brand/fullsend-brand';
 import { runQualityControl } from '@/lib/qc/check';
 import { signInRemedy } from '@/lib/auth/signin-errors';
+import { NextRequest } from 'next/server';
+import { proxy } from '@/proxy';
 import { fullsendLockupSvg, fullsendIconSvg, fullsendFaviconSvg } from '@/lib/brand/logo';
 import type { Project, User } from '@/lib/types';
 
@@ -442,5 +444,30 @@ describe('sign-in failures', () => {
     const remedy = signInRemedy('some entirely new failure mode');
     expect(remedy).toBeTruthy();
     expect(remedy).toMatch(/auth logs/i);
+  });
+});
+
+describe('a sign-in link that lands at the site root', () => {
+  const at = (url: string) => proxy(new NextRequest(new URL(url)));
+
+  it('forwards a code at the root to the route that can spend it', () => {
+    const res = at('https://app.example.com/?code=ab7a9e6f-3f7b-4b1e-af4f-ad3e0939126a');
+    expect(res.status).toBe(307);
+    const to = new URL(res.headers.get('location')!);
+    expect(to.pathname).toBe('/api/auth/callback');
+    // The code must survive intact — it is single-use and unrecoverable.
+    expect(to.searchParams.get('code')).toBe('ab7a9e6f-3f7b-4b1e-af4f-ad3e0939126a');
+  });
+
+  it('sends an auth error to the sign-in screen, not the marketing page', () => {
+    const res = at('https://app.example.com/?error=access_denied&error_description=Email+link+is+invalid');
+    const to = new URL(res.headers.get('location')!);
+    expect(to.pathname).toBe('/login');
+    expect(to.searchParams.get('error')).toBe('Email link is invalid');
+  });
+
+  it('leaves an ordinary visit to the landing page alone', () => {
+    const res = at('https://app.example.com/');
+    expect(res.headers.get('location')).toBeNull();
   });
 });
