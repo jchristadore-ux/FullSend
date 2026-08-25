@@ -165,12 +165,11 @@ first deploy, once you know the URL, then redeploy.
 
 This is the step people miss, and without it nothing publishes.
 
-**On Vercel Pro**, `vercel.json` already schedules all five jobs and they start
-automatically. Nothing more to do.
-
-**On Vercel Hobby (the free plan)**, cron jobs only run *once per day* — not
-often enough to publish posts on time. FullSend ships a GitHub Actions workflow
-that fills the gap for free:
+The schedule runs from **GitHub Actions**, not from Vercel. That is deliberate:
+Vercel's free Hobby plan rejects any cron that fires more than once a day, and
+it rejects it *at deploy time* — so shipping a `vercel.json` with a one-minute
+schedule would stop you deploying at all. Running the schedule from Actions
+means FullSend works the same on every Vercel plan.
 
 1. In your repository: **Settings → Secrets and variables → Actions → New
    repository secret**, and add:
@@ -183,8 +182,32 @@ To check it is working, open **Actions → FullSend heartbeat → Run workflow**
 pick `queue`. A green run means the schedule is live. The Control Room
 (`/admin`) also shows queue depth and the oldest waiting job.
 
-Either way, the cron endpoints refuse any request without `CRON_SECRET`, so
-leaving it unset stops the jobs rather than exposing them.
+The cron endpoints refuse any request without `CRON_SECRET`, so leaving it unset
+stops the jobs rather than exposing them.
+
+#### Using Vercel's own cron jobs instead
+
+On **Vercel Pro**, native crons are more reliable than GitHub Actions, which can
+run late under load. To switch, add this to `vercel.json` and disable the
+heartbeat workflow from the Actions tab so nothing runs twice:
+
+```json
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "crons": [
+    { "path": "/api/cron/queue", "schedule": "* * * * *" },
+    { "path": "/api/cron/publish", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/daily", "schedule": "0 6 * * *" },
+    { "path": "/api/cron/weekly", "schedule": "0 7 * * 1" },
+    { "path": "/api/cron/health", "schedule": "0 */6 * * *" }
+  ]
+}
+```
+
+Vercel passes `Authorization: Bearer $CRON_SECRET` automatically, so the
+endpoints authenticate the same way either route. **Do not add this on Hobby** —
+the deploy will fail with *"Hobby accounts are limited to daily cron jobs."*
 
 ---
 
@@ -351,13 +374,12 @@ server.
 | `/api/cron/weekly` | weekly | The Weekly Send Report |
 | `/api/cron/health` | every 6 hours | Refreshes tokens, checks connections |
 
-**On Vercel Pro**, `vercel.json` sets all of this up automatically.
+The bundled **FullSend heartbeat** GitHub Actions workflow drives all of these —
+see [step 4 of the deploy guide](#step-4--make-the-background-jobs-run). It works
+on every Vercel plan, including the free one. On Vercel Pro you can swap to
+native crons instead; the deploy guide has the config.
 
-**On Vercel Hobby**, cron jobs are limited to once per day, which is too slow to
-publish on time — so the bundled **FullSend heartbeat** GitHub Actions workflow
-drives them instead. See [step 4 of the deploy guide](#step-4--make-the-background-jobs-run).
-
-**Anywhere else**, either point your own scheduler at those URLs (sending
+**Hosting elsewhere?** Either point your own scheduler at those URLs (sending
 `Authorization: Bearer $CRON_SECRET`) or run `npm run worker` as a long-lived
 process.
 
@@ -438,12 +460,18 @@ Check, in order: is a platform connected (Accounts), is the strategy approved
 (Strategy), is autopilot set to Manual (Settings), and is `CRON_SECRET` set so
 the background jobs can run.
 
-If all of those look right, the schedule itself is probably not running. On
-Vercel's free Hobby plan cron jobs only fire **once a day**, so posts sit in the
-queue looking correct while their send time passes. Enable the **FullSend
-heartbeat** workflow ([step 4](#step-4--make-the-background-jobs-run)) or move to
-Vercel Pro. The Control Room at `/admin` confirms it: a growing queue with an
-old "oldest queued job" means nothing is draining it.
+If all of those look right, the schedule itself is probably not running. Check
+the **Actions** tab — the **FullSend heartbeat** workflow should show runs every
+five minutes. If it is disabled, or its two secrets are missing, posts sit in
+the queue looking correct while their send time passes. See
+[step 4](#step-4--make-the-background-jobs-run). The Control Room at `/admin`
+confirms it either way: a growing queue with an old "oldest queued job" means
+nothing is draining it.
+
+**Vercel says "Hobby accounts are limited to daily cron jobs" and won't deploy**
+Something has added a `crons` block back into `vercel.json`. The shipped file
+has none, precisely so free-tier deploys work — the schedule runs from GitHub
+Actions instead. Remove the block, or upgrade to Pro if you want native crons.
 
 **Data disappeared after a restart**
 You are on the in-memory store. Add the Supabase variables and run the
