@@ -121,18 +121,31 @@ and file storage). Both have free tiers that comfortably cover getting started.
 
 ### Step 2 — Generate an encryption key
 
-FullSend encrypts your social-media access tokens before storing them. Generate
-a key:
+FullSend encrypts your social-media access tokens before storing them, so it
+needs a 32-byte key. Any of these produce one:
 
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-```
+- **In a terminal:**
+  ```bash
+  node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+  ```
+- **In your browser**, from the developer console on any page (F12 → Console):
+  ```js
+  btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
+  ```
+- **In Supabase**, in the same SQL Editor you used in step 1:
+  ```sql
+  select encode(gen_random_bytes(32), 'base64');
+  ```
+
+Keep it out of the repository — it belongs in Vercel's environment variables
+only. Changing it later makes existing stored tokens unreadable, and every
+connected account has to be reconnected.
 
 ### Step 3 — Deploy
 
-Push this repository to GitHub, then import it at
-[vercel.com/new](https://vercel.com/new). Copy `.env.example` into Vercel's
-environment variables and fill in what you have. At minimum:
+Import the repository at [vercel.com/new](https://vercel.com/new). Vercel
+detects Next.js on its own; no build settings to change. Copy `.env.example`
+into Vercel's environment variables and fill in what you have. At minimum:
 
 ```
 NEXT_PUBLIC_APP_URL=https://your-app.vercel.app
@@ -144,7 +157,34 @@ CRON_SECRET=<any long random string>
 ANTHROPIC_API_KEY=<or OPENAI_API_KEY>
 ```
 
-`vercel.json` already schedules the background jobs. They start automatically.
+`NEXT_PUBLIC_APP_URL` has to match your real domain exactly — OAuth callbacks
+and the media URLs the platforms fetch are both built from it. Set it after the
+first deploy, once you know the URL, then redeploy.
+
+### Step 4 — Make the background jobs run
+
+This is the step people miss, and without it nothing publishes.
+
+**On Vercel Pro**, `vercel.json` already schedules all five jobs and they start
+automatically. Nothing more to do.
+
+**On Vercel Hobby (the free plan)**, cron jobs only run *once per day* — not
+often enough to publish posts on time. FullSend ships a GitHub Actions workflow
+that fills the gap for free:
+
+1. In your repository: **Settings → Secrets and variables → Actions → New
+   repository secret**, and add:
+   - `FULLSEND_URL` — your deployed URL, e.g. `https://your-app.vercel.app`
+   - `FULLSEND_CRON_SECRET` — the same value you set for `CRON_SECRET` in Vercel
+2. Open the **Actions** tab and enable workflows if prompted. **FullSend
+   heartbeat** then runs every five minutes.
+
+To check it is working, open **Actions → FullSend heartbeat → Run workflow** and
+pick `queue`. A green run means the schedule is live. The Control Room
+(`/admin`) also shows queue depth and the oldest waiting job.
+
+Either way, the cron endpoints refuse any request without `CRON_SECRET`, so
+leaving it unset stops the jobs rather than exposing them.
 
 ---
 
@@ -311,9 +351,15 @@ server.
 | `/api/cron/weekly` | weekly | The Weekly Send Report |
 | `/api/cron/health` | every 6 hours | Refreshes tokens, checks connections |
 
-`vercel.json` sets these up automatically on Vercel. Elsewhere, either point
-your own scheduler at those URLs (sending `Authorization: Bearer $CRON_SECRET`)
-or run `npm run worker` as a long-lived process.
+**On Vercel Pro**, `vercel.json` sets all of this up automatically.
+
+**On Vercel Hobby**, cron jobs are limited to once per day, which is too slow to
+publish on time — so the bundled **FullSend heartbeat** GitHub Actions workflow
+drives them instead. See [step 4 of the deploy guide](#step-4--make-the-background-jobs-run).
+
+**Anywhere else**, either point your own scheduler at those URLs (sending
+`Authorization: Bearer $CRON_SECRET`) or run `npm run worker` as a long-lived
+process.
 
 **The daily loop, in full:** check connections → check upcoming posts →
 generate missing content → run quality control → publish what's due → collect
@@ -391,6 +437,13 @@ exactly which check fired, edit it, and approve. Editing re-runs the same checks
 Check, in order: is a platform connected (Accounts), is the strategy approved
 (Strategy), is autopilot set to Manual (Settings), and is `CRON_SECRET` set so
 the background jobs can run.
+
+If all of those look right, the schedule itself is probably not running. On
+Vercel's free Hobby plan cron jobs only fire **once a day**, so posts sit in the
+queue looking correct while their send time passes. Enable the **FullSend
+heartbeat** workflow ([step 4](#step-4--make-the-background-jobs-run)) or move to
+Vercel Pro. The Control Room at `/admin` confirms it: a growing queue with an
+old "oldest queued job" means nothing is draining it.
 
 **Data disappeared after a restart**
 You are on the in-memory store. Add the Supabase variables and run the
