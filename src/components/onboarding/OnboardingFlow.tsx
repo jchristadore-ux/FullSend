@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Capabilities } from '@/lib/env';
 import type { AppScreen, Persona, ProductAnalysis, Repository } from '@/lib/types';
+import { failureRemedy } from '@/lib/jobs/failure-remedy';
 
 /**
  * "What's your app?" → "FullSend is looking under the hood…" → "We've got it."
@@ -85,10 +86,13 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
           json.jobs.analyze?.status === 'dead' || json.jobs.strategy?.status === 'dead';
         if (failed) {
           stopPolling();
-          setError(
-            json.jobs.analyze?.error ?? json.jobs.strategy?.error ?? 'Analysis could not finish',
-          );
-          setRemedy('Check the repository is public, or connect GitHub to read private repos.');
+          const message =
+            json.jobs.analyze?.error ?? json.jobs.strategy?.error ?? 'Analysis could not finish';
+          setError(message);
+          // Derived from what actually failed. A fixed line here told everyone
+          // to check their repository, including when the repository was fine
+          // and the AI account had simply run out of credit.
+          setRemedy(failureRemedy(message));
           setPhase('error');
           return;
         }

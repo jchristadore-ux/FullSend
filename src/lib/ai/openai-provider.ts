@@ -2,6 +2,7 @@ import 'server-only';
 import OpenAI from 'openai';
 import { env } from '../env';
 import { FullSendError } from '../errors';
+import { isBillingFailure, providerMessage } from './provider-errors';
 import { estimateCost, OPENAI_MODELS } from './pricing';
 import type { AiProvider, CompletionRequest, CompletionResponse, ModelTier } from './types';
 
@@ -73,8 +74,27 @@ export class OpenAiProvider implements AiProvider {
         });
       }
       if (e instanceof OpenAI.APIError) {
-        throw new FullSendError('ai_error', `OpenAI API error: ${e.message}`, {
-          retryable: (e.status ?? 500) >= 500,
+        const message = providerMessage(e);
+
+        // Same as Anthropic: a spent balance is a billing problem, not a
+        // temporary one, and retrying it forever helps nobody.
+        if (isBillingFailure(message)) {
+          throw new FullSendError('ai_billing', 'Your OpenAI account is out of credit', {
+            status: e.status,
+            retryable: false,
+            remedy:
+              'Add credit at platform.openai.com → Billing. Everything FullSend has already made is kept, and generation resumes once there is a balance.',
+            meta: { model, status: e.status },
+            cause: e,
+          });
+        }
+
+        const retryable = (e.status ?? 500) >= 500;
+        throw new FullSendError('ai_error', `OpenAI API error: ${message}`, {
+          retryable,
+          remedy: retryable
+            ? 'FullSend will retry. If it persists, check the OpenAI status page.'
+            : 'OpenAI rejected the request rather than failing temporarily, so retrying will not help. The message above is theirs.',
           meta: { model, status: e.status },
           cause: e,
         });
