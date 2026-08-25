@@ -20,6 +20,20 @@ import {
   type TenantScope,
 } from './store';
 
+/**
+ * True when the database answered "that table isn't there" — the signature of
+ * a project whose migration has never been run.
+ */
+export function isSchemaMissing(error: { message?: string; code?: string }): boolean {
+  if (error.code === '42P01' || error.code === 'PGRST205') return true;
+  const m = (error.message ?? '').toLowerCase();
+  return (
+    m.includes('does not exist') ||
+    m.includes('could not find the table') ||
+    m.includes('schema cache')
+  );
+}
+
 export class SupabaseStore implements Store {
   private client: SupabaseClient;
   /** project_id -> owning user_id, to avoid a lookup per row. */
@@ -107,6 +121,24 @@ export class SupabaseStore implements Store {
   }
 
   private wrap(error: { message: string; code?: string }, table: string): FullSendError {
+    /*
+     * A missing table is not transient, and no number of retries creates one.
+     * Calling it transient sends the job queue into a retry cycle that can
+     * never succeed while telling the founder to wait for a recovery that is
+     * not coming — when the actual fix is one migration they have not run.
+     *
+     * 42P01 is Postgres for "undefined table"; PGRST205 is PostgREST failing
+     * to find it in the schema cache, which is what a fresh project returns.
+     */
+    if (isSchemaMissing(error)) {
+      return new FullSendError('db_schema_missing', `The \`${table}\` table does not exist`, {
+        retryable: false,
+        remedy:
+          'Run supabase/migrations/0001_fullsend_init.sql in the Supabase SQL Editor. It creates every table and the rules that keep tenants separate.',
+        meta: { table, code: error.code },
+      });
+    }
+
     return new FullSendError('db_error', `Database error on ${table}: ${error.message}`, {
       retryable: true,
       remedy: 'This is usually transient. FullSend will retry automatically.',

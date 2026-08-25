@@ -14,6 +14,7 @@
  */
 import { NextResponse } from 'next/server';
 import { env, capabilities } from '@/lib/env';
+import { isSchemaMissing } from '@/lib/db/supabase-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,11 +54,49 @@ async function reachSupabase(): Promise<Reachability> {
   }
 }
 
+type Schema =
+  | { checked: false; reason: string }
+  | { checked: true; installed: boolean; error?: string };
+
+/**
+ * Asks whether the tables exist.
+ *
+ * Reaching Supabase and having a schema in it are different things, and the
+ * gap between them is invisible until the first page that queries something —
+ * which is the first page after sign-in, so the app appears to break exactly
+ * when it should start working. One read of `projects` settles it.
+ */
+async function checkSchema(): Promise<Schema> {
+  const { url, serviceRoleKey } = env.supabase;
+  if (!url) return { checked: false, reason: 'NEXT_PUBLIC_SUPABASE_URL is not set' };
+  if (!serviceRoleKey) return { checked: false, reason: 'SUPABASE_SERVICE_ROLE_KEY is not set' };
+
+  const base = url.replace(/\/+$/, '');
+  try {
+    const res = await fetch(`${base}/rest/v1/projects?select=id&limit=1`, {
+      headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}` },
+      signal: AbortSignal.timeout(REACHABILITY_TIMEOUT_MS),
+      cache: 'no-store',
+    });
+    if (res.ok) return { checked: true, installed: true };
+
+    const body = (await res.json().catch(() => ({}))) as { message?: string; code?: string };
+    if (isSchemaMissing(body)) return { checked: true, installed: false };
+    return { checked: true, installed: false, error: body.message ?? `HTTP ${res.status}` };
+  } catch (e) {
+    return {
+      checked: true,
+      installed: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
 /** Present and non-empty. The value itself never leaves the server. */
 const set = (v: string | undefined) => Boolean(v && v.trim());
 
 export async function GET(): Promise<NextResponse> {
-  const supabase = await reachSupabase();
+  const [supabase, schema] = await Promise.all([reachSupabase(), checkSchema()]);
 
   const required = {
     NEXT_PUBLIC_APP_URL: set(process.env.NEXT_PUBLIC_APP_URL),
@@ -80,6 +119,13 @@ export async function GET(): Promise<NextResponse> {
         : `Supabase answered ${supabase.status} — check that NEXT_PUBLIC_SUPABASE_URL is the Project URL from Settings → API, and that the anon key belongs to the same project.`,
     );
   }
+  if (schema.checked && !schema.installed) {
+    problems.push(
+      schema.error
+        ? `Could not read the database schema: ${schema.error}`
+        : 'The database tables do not exist. Run supabase/migrations/0001_fullsend_init.sql in the Supabase SQL Editor.',
+    );
+  }
 
   return NextResponse.json(
     {
@@ -91,6 +137,7 @@ export async function GET(): Promise<NextResponse> {
       aiProvider: env.ai.provider,
       required,
       supabase,
+      schema,
       capabilities: capabilities(),
       problems,
     },

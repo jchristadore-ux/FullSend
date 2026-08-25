@@ -16,6 +16,7 @@ import { extractJson } from '@/lib/ai/client';
 import { FULLSEND_VOICE } from '@/lib/brand/fullsend-brand';
 import { runQualityControl } from '@/lib/qc/check';
 import { signInRemedy } from '@/lib/auth/signin-errors';
+import { isSchemaMissing } from '@/lib/db/supabase-store';
 import { fullsendLockupSvg, fullsendIconSvg, fullsendFaviconSvg } from '@/lib/brand/logo';
 import type { Project, User } from '@/lib/types';
 
@@ -442,5 +443,23 @@ describe('sign-in failures', () => {
     const remedy = signInRemedy('some entirely new failure mode');
     expect(remedy).toBeTruthy();
     expect(remedy).toMatch(/auth logs/i);
+  });
+});
+
+describe('a database with no schema in it', () => {
+  it('recognises how Postgres and PostgREST each report a missing table', () => {
+    expect(isSchemaMissing({ code: '42P01', message: 'relation "projects" does not exist' })).toBe(true);
+    expect(
+      isSchemaMissing({
+        code: 'PGRST205',
+        message: "Could not find the table 'public.projects' in the schema cache",
+      }),
+    ).toBe(true);
+  });
+
+  it('does not mistake an ordinary failure for a missing schema', () => {
+    expect(isSchemaMissing({ code: '57014', message: 'canceling statement due to statement timeout' })).toBe(false);
+    expect(isSchemaMissing({ code: '23505', message: 'duplicate key value violates unique constraint' })).toBe(false);
+    expect(isSchemaMissing({})).toBe(false);
   });
 });
