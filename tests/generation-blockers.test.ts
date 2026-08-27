@@ -1,15 +1,16 @@
 /**
  * Why the calendar is empty.
  *
- * Generation can decline to run for five separate reasons, and each has a
- * different fix. The failure this pins is the one that cost a real afternoon:
- * a founder pressed "Generate 30 days" six times against an unapproved
- * strategy, got a no-op every time, and was told to try a longer window —
- * advice that could never work, in place of the one link that would have.
+ * Generation declines to run for five separate reasons, and each has a
+ * different fix. Checked only inside the job, every one of them looked
+ * identical from the outside: press "Generate 30 days", get nothing, press it
+ * again. What made that unfalsifiable was the messaging — a no-op reported as
+ * progress, and a remedy ("try a longer window") appended to reasons a longer
+ * window cannot fix.
  *
  * So: the blocker must be readable before the button is pressed, it must name
- * the fix, and the "longer window" suggestion must appear only where a longer
- * window is genuinely the remedy.
+ * its own fix, a failed run must not read as a running one, and the longer
+ * window must only be suggested where a longer window is genuinely the answer.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createProject, fakeGitHubClient, setupContext, teardown, type TestContext } from './helpers';
