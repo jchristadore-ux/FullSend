@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { FullSendLockup } from '@/components/brand/Logo';
 import { HeroFlow } from '@/components/marketing/HeroFlow';
 import { AutopilotPanel } from '@/components/marketing/AutopilotPanel';
+import { SignInLink, StartLink } from '@/components/marketing/SessionLinks';
 
 export default function LandingPage() {
   return (
@@ -36,12 +37,8 @@ function Nav() {
           <a href="#pricing" className="hidden text-sm text-dim transition-colors hover:text-mist sm:block">
             Pricing
           </a>
-          <Link href="/login" className="text-sm text-dim transition-colors hover:text-mist">
-            Sign in
-          </Link>
-          <Link href="/onboarding" className="btn-send !px-4 !py-2 text-sm">
-            SEND IT →
-          </Link>
+          <SignInLink className="text-sm text-dim transition-colors hover:text-mist" />
+          <StartLink className="btn-send !px-4 !py-2 text-sm" />
         </div>
       </nav>
     </header>
@@ -507,9 +504,7 @@ function Footer() {
             <a href="#pricing" className="transition-colors hover:text-mist">
               Pricing
             </a>
-            <Link href="/login" className="transition-colors hover:text-mist">
-              Sign in
-            </Link>
+            <SignInLink className="transition-colors hover:text-mist" />
           </div>
         </div>
         <p className="mt-8 border-t border-edge pt-8 font-mono text-xs text-dimmer">
