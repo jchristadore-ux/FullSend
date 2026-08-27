@@ -107,6 +107,53 @@ const set = (v: string | undefined) => Boolean(v && v.trim());
  */
 const live = (name: string): string | undefined => process.env[name];
 
+type TikTokFile = { ok: boolean; status?: number; body?: string; note: string };
+
+/**
+ * Asks for the verification file the way TikTok does.
+ *
+ * Anonymous, no caching, and against the public URL rather than the local
+ * filesystem — a file present in the repository but not reachable over HTTP is
+ * exactly the failure this needs to catch.
+ */
+async function checkTikTokFile(): Promise<TikTokFile> {
+  const url = `${env.appUrl.replace(/\/+$/, '')}/tiktok-developers-site-verification.txt`;
+  try {
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(REACHABILITY_TIMEOUT_MS),
+      cache: 'no-store',
+    });
+    const body = (await res.text()).trim();
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        note: `${url} answered ${res.status}.`,
+      };
+    }
+    if (!body.startsWith('tiktok-developers-site-verification=')) {
+      return {
+        ok: false,
+        status: res.status,
+        body,
+        note: `${url} answered 200 but the body is not a TikTok signature.`,
+      };
+    }
+    return {
+      ok: true,
+      status: res.status,
+      body,
+      note: 'Serving. If TikTok still rejects it, the signature does not match the file it issued for that property.',
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      note: `Could not fetch ${url}: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}
+
 export async function GET(): Promise<NextResponse> {
   const [supabase, schema] = await Promise.all([reachSupabase(), checkSchema()]);
 
@@ -153,33 +200,23 @@ export async function GET(): Promise<NextResponse> {
       'FULLSEND_CONTACT_EMAIL is not set — /privacy, /terms and /data-deletion have no contact address, and both TikTok and Meta reject apps whose policies name nobody reachable.',
     );
   }
-  if (set(env.tiktok.clientKey) && !set(env.tiktok.verificationCode)) {
-    reviewBlockers.push(
-      'TIKTOK_VERIFICATION_CODE is not set — /tiktok-developers-site-verification.txt returns 404, so TikTok cannot verify this host and will reject the Terms and Privacy URLs as unverified.',
-    );
-  }
 
   /*
-   * Reported on its own, not only through reviewBlockers.
+   * Fetched, not inferred.
    *
-   * The blocker above is gated on a TikTok client key being present, which
-   * seemed reasonable — no point nagging a deployment that never touches
-   * TikTok. But URL verification comes *first* in TikTok's setup: you verify
-   * the host before the app details form will save, which is well before
-   * anyone has pasted credentials into their hosting dashboard. So the one
-   * moment the answer is wanted is exactly the moment the gate holds it shut,
-   * and an empty reviewBlockers list reads as "nothing wrong" when it actually
-   * means "not checked".
-   *
-   * An unconditional field cannot do that. It says what is true either way.
+   * This used to report whether an environment variable was set, which is a
+   * proxy for the thing that matters and not the thing itself. TikTok does not
+   * read your configuration; it makes an anonymous HTTP request for one file
+   * and reads the body. So this does exactly that, against the same public URL,
+   * and reports what came back — a check that cannot pass while the fetch TikTok
+   * performs would fail.
    */
-  const tiktokVerification = {
-    configured: set(env.tiktok.verificationCode),
-    servedAt: '/tiktok-developers-site-verification.txt',
-    note: set(env.tiktok.verificationCode)
-      ? 'Serving. If TikTok still rejects it, the string does not match the file it issued.'
-      : 'Not serving — that path returns 404. Set TIKTOK_VERIFICATION_CODE and redeploy; adding the variable alone does not change the running deployment.',
-  };
+  const tiktokVerification = await checkTikTokFile();
+  if (!tiktokVerification.ok) {
+    reviewBlockers.push(
+      `TikTok cannot verify this host: ${tiktokVerification.note} Its Terms and Privacy URLs will be rejected as unverified.`,
+    );
+  }
 
   return NextResponse.json(
     {
