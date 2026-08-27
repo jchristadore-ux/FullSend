@@ -110,6 +110,36 @@ describe('what the generate button says', () => {
     expect(longerWindowHelps(undefined)).toBe(true);
   });
 
+  /*
+   * The runner requeues a retryable failure rather than marking it failed, so
+   * a status check sees 'queued' with the reason sitting in last_error. Every
+   * retry then reads back as progress and the founder is told to refresh, for
+   * as long as the failure keeps happening.
+   */
+  it('reports a requeued failure instead of calling it progress', () => {
+    const message = describeGenerationOutcome(
+      {
+        status: 'queued',
+        attempts: 1,
+        error: 'Your credit balance is too low to access the Anthropic API.',
+      },
+      30,
+    );
+    expect(message).not.toContain('refresh in a moment');
+    expect(message).toContain('credit balance');
+  });
+
+  it('still reads as progress before the first attempt', () => {
+    const message = describeGenerationOutcome({ status: 'queued', attempts: 0, error: null }, 30);
+    expect(message).toContain('Still working');
+  });
+
+  it('reports a job that exhausted its retries', () => {
+    expect(
+      describeGenerationOutcome({ status: 'dead', attempts: 5, error: 'Repo not found' }, 30),
+    ).toBe('Repo not found');
+  });
+
   it('reports what a successful run actually wrote', () => {
     expect(
       describeGenerationOutcome({ status: 'succeeded', result: { generated: 18, blockedByQc: 6 } }, 30),

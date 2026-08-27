@@ -16,6 +16,8 @@ import { longerWindowHelps } from '../content/blockers';
 export interface GenerationJob {
   status?: string;
   error?: string | null;
+  /** How many times it has already been tried. Non-zero means it has failed. */
+  attempts?: number;
   result?: {
     generated?: number;
     rejectedDuplicates?: number;
@@ -25,7 +27,25 @@ export interface GenerationJob {
 }
 
 export function describeGenerationOutcome(job: GenerationJob, days: number): string {
-  if (job.status === 'failed' || job.status === 'dead') {
+  if (job.status === 'dead') {
+    return job.error ?? 'That run failed. The Control Room at /admin has the details.';
+  }
+
+  /*
+   * A retryable failure does not leave the job marked failed.
+   *
+   * The runner puts it straight back to `queued` with a backoff and the reason
+   * in `last_error`, so a status check sees "queued" and reports progress —
+   * every time, on every retry, while the real error sits unread on the row.
+   * That is how a broken run reads as "refresh in a moment" indefinitely: the
+   * refresh shows the same empty calendar and nothing says why.
+   *
+   * Attempts is what separates the two. A job that has never run has none.
+   */
+  if (job.status !== 'succeeded' && (job.attempts ?? 0) > 0 && job.error) {
+    return `That run failed and will retry: ${job.error}`;
+  }
+  if (job.status === 'failed') {
     return job.error ?? 'That run failed. The Control Room at /admin has the details.';
   }
   if (job.status !== 'succeeded') {
