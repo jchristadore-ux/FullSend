@@ -18,6 +18,7 @@ import { runQualityControl } from '@/lib/qc/check';
 import { signInRemedy } from '@/lib/auth/signin-errors';
 import { isSchemaMissing } from '@/lib/db/supabase-store';
 import { failureRemedy } from '@/lib/jobs/failure-remedy';
+import { describeGenerationOutcome } from '@/lib/jobs/generation-outcome';
 import { isBillingFailure, providerMessage } from '@/lib/ai/provider-errors';
 import { fullsendLockupSvg, fullsendIconSvg, fullsendFaviconSvg, fullsendAppIconSvg } from '@/lib/brand/logo';
 import type { Project, User } from '@/lib/types';
@@ -537,5 +538,50 @@ describe('the home-screen icon', () => {
     for (const size of [180, 192, 512]) {
       expect(fullsendAppIconSvg(size)).toContain('#FF5A1F');
     }
+  });
+});
+
+describe('what "Generate" reports back', () => {
+  const done = (result: Record<string, unknown>) => ({ status: 'succeeded', result });
+
+  it('says how many posts it wrote', () => {
+    expect(describeGenerationOutcome(done({ generated: 18 }), 14)).toBe('Wrote 18 posts.');
+    expect(describeGenerationOutcome(done({ generated: 1 }), 14)).toBe('Wrote 1 post.');
+  });
+
+  it('mentions anything quality control held back', () => {
+    expect(describeGenerationOutcome(done({ generated: 18, blockedByQc: 6 }), 14)).toBe(
+      'Wrote 18 posts. 6 held for your review.',
+    );
+  });
+
+  it('explains a run that deliberately made nothing, rather than looking broken', () => {
+    // The case that prompted this: the calendar was already full, the job
+    // succeeded, and the UI said "refresh in a moment" — so the refresh showed
+    // the same screen with nothing to explain it.
+    const msg = describeGenerationOutcome(
+      done({ generated: 0, reason: 'The calendar is already full for this window' }),
+      14,
+    );
+    expect(msg).toContain('Nothing new to add');
+    expect(msg).toContain('already full');
+    expect(msg).toMatch(/longer window/i);
+    expect(msg).not.toMatch(/refresh in a moment/i);
+  });
+
+  it('passes on the duplicate-check reason too', () => {
+    expect(
+      describeGenerationOutcome(done({ generated: 0, reason: 'Nothing new passed the duplicate check' }), 30),
+    ).toContain('duplicate check');
+  });
+
+  it('surfaces a failure instead of claiming progress', () => {
+    expect(
+      describeGenerationOutcome({ status: 'dead', error: 'Your Anthropic account is out of credit' }, 14),
+    ).toBe('Your Anthropic account is out of credit');
+  });
+
+  it('still reads as in-progress while it genuinely is', () => {
+    expect(describeGenerationOutcome({ status: 'running' }, 14)).toMatch(/still working/i);
   });
 });

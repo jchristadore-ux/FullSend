@@ -4,6 +4,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { STATUS_STYLE } from './status';
+import {
+  describeGenerationOutcome,
+  type GenerationJob,
+} from '@/lib/jobs/generation-outcome';
 
 export interface CalendarItem {
   id: string;
@@ -57,10 +61,14 @@ export function CalendarBoard({
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.remedy ?? json.message);
+
       // Nudge the queue so the founder sees the result now rather than at the
-      // next cron tick.
+      // next cron tick. Twice: generating content enqueues the scheduling that
+      // follows it, and one drain leaves that second job sitting there.
       await fetch(`/api/projects/${projectId}/tick`, { method: 'POST' });
-      setMessage(`Generating a ${days}-day calendar — refresh in a moment.`);
+      await fetch(`/api/projects/${projectId}/tick`, { method: 'POST' });
+
+      setMessage(await outcomeOf(projectId, json.jobId, days));
       router.refresh();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
@@ -206,5 +214,22 @@ function safeZone(tz: string): string | undefined {
     return tz;
   } catch {
     return undefined;
+  }
+}
+
+/** Reads the job back so the button can say what the run actually did. */
+async function outcomeOf(
+  projectId: string,
+  jobId: string | undefined,
+  days: number,
+): Promise<string> {
+  const pending = `Generating a ${days}-day calendar — refresh in a moment.`;
+  if (!jobId) return pending;
+  try {
+    const res = await fetch(`/api/projects/${projectId}/jobs/${jobId}`, { cache: 'no-store' });
+    if (!res.ok) return pending;
+    return describeGenerationOutcome((await res.json()) as GenerationJob, days);
+  } catch {
+    return pending;
   }
 }
