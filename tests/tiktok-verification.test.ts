@@ -21,19 +21,14 @@ const PATH = join(process.cwd(), 'public', 'tiktok-developers-site-verification.
 describe('tiktok site verification file', () => {
   const raw = readFileSync(PATH, 'utf8');
 
-  it('is a single line carrying a TikTok signature', () => {
+  it('is exactly the signature, with nothing around it', () => {
+    // No trailing newline. TikTok compares the body against the signature it
+    // generated, and a newline this file added is a byte that signature does
+    // not have. Every other explanation has been eliminated, so this one gets
+    // removed rather than assumed harmless.
+    expect(raw).toBe(raw.trim());
     expect(raw.startsWith('tiktok-developers-site-verification=')).toBe(true);
-    // One line and one trailing newline. TikTok reads the body; anything else
-    // in it is a difference between what it issued and what it finds.
-    expect(raw.split('\n').filter(Boolean)).toHaveLength(1);
-    expect(raw.endsWith('\n')).toBe(true);
-  });
-
-  it('carries no stray whitespace', () => {
-    // A leading space survives a copy-paste out of a text editor and is
-    // invisible everywhere it would be noticed.
-    expect(raw).toBe(raw.trimStart());
-    expect(raw.trimEnd()).toBe(raw.slice(0, -1));
+    expect(raw).not.toContain('\n');
   });
 
   it('has a signature after the equals sign', () => {
