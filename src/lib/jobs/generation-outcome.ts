@@ -11,6 +11,8 @@
  * can pin what each outcome reads as.
  */
 
+import { longerWindowHelps } from '../content/blockers';
+
 export interface GenerationJob {
   status?: string;
   error?: string | null;
@@ -37,8 +39,17 @@ export function describeGenerationOutcome(job: GenerationJob, days: number): str
     return held > 0 ? `Wrote ${posts}. ${held} held for your review.` : `Wrote ${posts}.`;
   }
 
-  // Finished, made nothing, and knows why. Say which, and what to do about it.
+  /*
+   * Finished, made nothing, and knows why.
+   *
+   * "Try a longer window" only belongs where a longer window is genuinely the
+   * remedy. Appending it to every reason told someone whose strategy was
+   * unapproved to press the same button again with a bigger number — advice
+   * that cannot work, offered in place of the one thing that would.
+   */
   const reason = job.result?.reason;
   if (!reason) return `Nothing new to add for the next ${days} days. Try a longer window.`;
-  return `Nothing new to add: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}. Try a longer window.`;
+
+  const sentence = `Nothing new to add: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}.`;
+  return longerWindowHelps(reason) ? `${sentence} Try a longer window.` : sentence;
 }

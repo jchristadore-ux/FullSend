@@ -8,6 +8,7 @@ import {
   describeGenerationOutcome,
   type GenerationJob,
 } from '@/lib/jobs/generation-outcome';
+import type { GenerationBlocker } from '@/lib/content/blockers';
 
 export interface CalendarItem {
   id: string;
@@ -32,12 +33,14 @@ export function CalendarBoard({
   days,
   windows,
   entries,
+  blocked,
 }: {
   projectId: string;
   timezone: string;
   days: number;
   windows: number[];
   entries: CalendarItem[];
+  blocked: GenerationBlocker | null;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
@@ -108,14 +111,40 @@ export function CalendarBoard({
             {w} days
           </Link>
         ))}
-        <button onClick={generate} disabled={generating} className="btn-send ml-auto !px-4 !py-2 text-xs">
+        <button
+          onClick={generate}
+          disabled={generating || blocked !== null}
+          title={blocked ? blocked.message : undefined}
+          className="btn-send ml-auto !px-4 !py-2 text-xs"
+        >
           {generating ? 'GENERATING…' : `GENERATE ${days} DAYS`}
         </button>
       </div>
 
+      {/*
+        The blocker is a standing state, not a transient result, so it sits on
+        the page rather than flashing after a click. Pressing the button six
+        times and reading six lines of small orange text is how the previous
+        version wasted an afternoon.
+      */}
+      {blocked && (
+        <div className="panel mt-6 border-warn/40 p-5">
+          <span className="label text-warn">Nothing can be generated yet</span>
+          <p className="mt-2 text-sm text-dim">{blocked.message}</p>
+          <Link href={blocked.fix.href} className="btn-send mt-4 !px-4 !py-2 text-xs">
+            {blocked.fix.label} →
+          </Link>
+        </div>
+      )}
+
       {message && <p className="mt-3 font-mono text-xs text-orange">{message}</p>}
 
-      {entries.length === 0 ? (
+      {/*
+        With a blocker on screen the empty state is redundant — and its promise
+        ("Generate a calendar and FullSend fills it with real posts") is one the
+        button cannot keep yet, so showing both says two contradictory things.
+      */}
+      {entries.length === 0 && !blocked && (
         <div className="panel mt-6 p-10 text-center">
           <p className="font-display text-xl font-extrabold tracking-tight text-mist">
             Nothing scheduled yet.
@@ -124,7 +153,9 @@ export function CalendarBoard({
             Generate a calendar and FullSend fills it with real posts.
           </p>
         </div>
-      ) : (
+      )}
+
+      {entries.length > 0 && (
         <div className="mt-6 space-y-5">
           {[...byDay.entries()].map(([day, items]) => (
             <section key={day}>

@@ -5,6 +5,7 @@ import { calendar, CALENDAR_WINDOWS, queueDepth } from '@/lib/scheduler/schedule
 import { db } from '@/lib/db/repo';
 import { svgDataUri } from '@/lib/creative/render';
 import { CalendarBoard } from '@/components/app/CalendarBoard';
+import { generationBlocker } from '@/lib/automation/autopilot';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Content Calendar' };
@@ -24,6 +25,9 @@ export default async function CalendarPage({
 
   const entries = await calendar(session.scope, project.id, days);
   const runway = await queueDepth(session.scope, project.id);
+  // Read before rendering, so an empty calendar explains itself rather than
+  // offering a button that cannot do what it says.
+  const blocked = await generationBlocker(session.scope, project);
 
   const withPreview = await Promise.all(
     entries.map(async (e) => {
@@ -65,6 +69,7 @@ export default async function CalendarPage({
         days={days}
         windows={[...CALENDAR_WINDOWS]}
         entries={withPreview}
+        blocked={blocked}
       />
     </div>
   );

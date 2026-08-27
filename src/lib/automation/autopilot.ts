@@ -38,6 +38,7 @@ import { logger } from '../logger';
 import { checkAllConnections, getUsableConnection } from '../social/connections';
 import { LIVE_PLATFORMS } from '../types';
 import { generateContent } from '../content/generate';
+import { blocker, type GenerationBlocker } from '../content/blockers';
 import { runQualityControl, canAutoPublish } from '../qc/check';
 import { openSlots, queueDepth, scheduleContent } from '../scheduler/schedule';
 import { publishScheduledPost, resumeAfterReconnect } from '../publish/publish';
@@ -292,6 +293,62 @@ interface TopUpResult {
   rejectedDuplicates: number;
   blockedByQc: number;
   reason: string;
+  /** Set when the run could not start. Absent when it ran and simply found nothing. */
+  blocker?: GenerationBlocker;
+}
+
+/**
+ * The preconditions generation needs, read without running it.
+ *
+ * Returns the first thing standing in the way, or null when the machine is
+ * ready to write. The calendar calls this to say so up front; `topUpContent`
+ * calls it so the two can never disagree about what is wrong.
+ */
+export async function generationBlocker(
+  scope: TenantScope,
+  project: Project,
+): Promise<GenerationBlocker | null> {
+  const [analysis, strategy, brand] = await Promise.all([
+    getAnalysis(scope, project.id),
+    getStrategy(scope, project.id),
+    getBrandProfile(scope, project.id),
+  ]);
+  if (!analysis) return blocker('no_analysis');
+  if (!strategy) return blocker('no_strategy');
+  if (!strategy.approved) return blocker('strategy_unapproved');
+  if (!brand) return blocker('no_brand');
+  if ((await publishablePlatforms(scope, project, strategy)).length === 0) {
+    return blocker('no_platform');
+  }
+  return null;
+}
+
+/**
+ * Platforms to plan for: the connected ones first, then anything else the
+ * strategy targets.
+ *
+ * Building the calendar is step three; connecting accounts is step four, and
+ * Meta's app review can take weeks — a founder should see their content in the
+ * meantime. Publishing is where a missing connection is surfaced, with a
+ * remedy, so nothing here can quietly post into the void.
+ */
+async function publishablePlatforms(
+  scope: TenantScope,
+  project: Project,
+  strategy: { platform_strategy: { platform: Platform }[] },
+): Promise<Platform[]> {
+  const connected = await db().find(scope, 'social_accounts', {
+    where: { project_id: project.id, status: 'connected' },
+  });
+  const connectedPlatforms = connected.map((a) => a.platform);
+  const targeted = strategy.platform_strategy
+    .map((p) => p.platform)
+    .filter((p) => LIVE_PLATFORMS.includes(p));
+
+  return [
+    ...connectedPlatforms.filter((p) => LIVE_PLATFORMS.includes(p)),
+    ...targeted.filter((p) => !connectedPlatforms.includes(p)),
+  ];
 }
 
 /** Fills open calendar slots with new content. */
@@ -309,47 +366,25 @@ export async function topUpContent(
     reason,
   });
 
-  const [analysis, strategy, brand] = await Promise.all([
-    getAnalysis(scope, project.id),
+  // One check, shared with the calendar page, so the button and the page can
+  // never give different answers about why nothing is being written.
+  const blocked = await generationBlocker(scope, project);
+  if (blocked) return { ...empty(blocked.message), blocker: blocked };
+
+  const [strategy, brand, analysis] = await Promise.all([
     getStrategy(scope, project.id),
     getBrandProfile(scope, project.id),
+    getAnalysis(scope, project.id),
   ]);
-  if (!analysis) return empty('No product analysis yet — run the repository analysis first');
-  if (!strategy) return empty('No marketing strategy yet');
-  if (!strategy.approved) return empty('Strategy is waiting on your approval');
-  if (!brand) return empty('No brand profile yet');
+  // generationBlocker returning null established all three are present.
+  if (!strategy || !brand || !analysis) return empty('Nothing to generate from');
 
-  const [personas, pillars, campaigns] = await Promise.all([
+  const [personas, pillars, campaigns, platforms] = await Promise.all([
     listPersonas(scope, project.id),
     listPillars(scope, project.id),
     listCampaigns(scope, project.id),
+    publishablePlatforms(scope, project, strategy),
   ]);
-
-  /*
-   * Plan for the platforms the strategy targets, not just the connected ones.
-   * Building the calendar is step three; connecting accounts is step four, and
-   * Meta's app review can take weeks — a founder should see their content in
-   * the meantime. Publishing is where a missing connection is surfaced, with a
-   * remedy, so nothing here can quietly post into the void.
-   */
-  const connected = await db().find(scope, 'social_accounts', {
-    where: { project_id: project.id, status: 'connected' },
-  });
-  const connectedPlatforms = connected.map((a) => a.platform);
-
-  const targeted = strategy.platform_strategy
-    .map((p) => p.platform)
-    .filter((p) => LIVE_PLATFORMS.includes(p));
-
-  // Connected platforms first, then anything else the strategy asked for.
-  const platforms = [
-    ...connectedPlatforms.filter((p) => LIVE_PLATFORMS.includes(p)),
-    ...targeted.filter((p) => !connectedPlatforms.includes(p)),
-  ];
-
-  if (platforms.length === 0) {
-    return empty('The strategy does not target any platform FullSend can publish to yet');
-  }
 
   const slots = await openSlots(scope, {
     project,
