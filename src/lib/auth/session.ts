@@ -50,7 +50,16 @@ export async function getSupabaseServerClient() {
         try {
           for (const { name, value, options } of toSet) cookieStore.set(name, value, options);
         } catch {
-          // Called from a Server Component: middleware refreshes instead.
+          /*
+           * Called from a Server Component, which cannot write cookies.
+           *
+           * Swallowing this is only safe because `proxy.ts` refreshes the
+           * session ahead of the page and owns the response it can write to.
+           * Without that, a rotated refresh token would be dropped here and
+           * the session would end on the next request — silently, since the
+           * throw never surfaces. If you remove the refresh from the proxy,
+           * this catch becomes a sign-out loop.
+           */
         }
       },
     },
