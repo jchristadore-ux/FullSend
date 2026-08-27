@@ -139,6 +139,21 @@ export async function GET(): Promise<NextResponse> {
     );
   }
 
+  /*
+   * Separate from `problems` on purpose.
+   *
+   * A missing contact address does not stop the app running, so it must not
+   * turn `ok` false — but it does stop TikTok and Meta approving the app, and
+   * you find that out weeks into a review queue. Reporting it here means it is
+   * checkable before submitting rather than after being rejected.
+   */
+  const reviewBlockers: string[] = [];
+  if (!set(env.contactEmail)) {
+    reviewBlockers.push(
+      'FULLSEND_CONTACT_EMAIL is not set — /privacy, /terms and /data-deletion have no contact address, and both TikTok and Meta reject apps whose policies name nobody reachable.',
+    );
+  }
+
   return NextResponse.json(
     {
       ok: problems.length === 0,
@@ -152,6 +167,8 @@ export async function GET(): Promise<NextResponse> {
       schema,
       capabilities: capabilities(),
       problems,
+      /** Anything that would fail a TikTok or Meta app review. */
+      reviewBlockers,
     },
     { headers: { 'Cache-Control': 'no-store' } },
   );

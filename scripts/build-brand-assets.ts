@@ -58,7 +58,7 @@ fs.writeFileSync(path.join(process.cwd(), 'public', 'favicon.svg'), fullsendFavi
  * Rendered from the same source as every other asset, so the icon cannot drift
  * from the brand: change the mark, run `npm run brand`, and these follow.
  */
-const RASTER: { file: string; size: number; maskable?: boolean }[] = [
+const RASTER: { file: string; size: number; maskable?: boolean; opaque?: boolean }[] = [
   // iOS home screen, 180 being what current iPhones ask for. Full-bleed: iOS
   // rounds a touch icon itself, so shipping rounded corners rounds them twice
   // and leaves dark notches down the sides.
@@ -69,16 +69,25 @@ const RASTER: { file: string; size: number; maskable?: boolean }[] = [
   { file: 'fullsend-app-icon-512.png', size: 512 },
   // Full-bleed again, for launchers that crop to their own shape.
   { file: 'fullsend-app-icon-maskable-512.png', size: 512, maskable: true },
+  // The size every developer portal and app store asks for: TikTok for
+  // Developers, the Meta app dashboard, and the App Store all want a square
+  // 1024. Full-bleed for the same reason as the others — each of them draws
+  // its own rounded container, so built-in corners would be rounded twice.
+  // `opaque` because those portals reject an icon carrying an alpha channel
+  // even when nothing in it is actually transparent, and this one is a solid
+  // square — the alpha is pure overhead that fails an upload.
+  { file: 'fullsend-app-icon-1024.png', size: 1024, maskable: true, opaque: true },
 ];
 
 async function writeRasterIcons(): Promise<void> {
   await Promise.all(
-    RASTER.map(async ({ file, size, maskable }) => {
+    RASTER.map(async ({ file, size, maskable, opaque }) => {
       const svg = fullsendAppIconSvg(size, { maskable });
-      await sharp(Buffer.from(svg, 'utf8'), { density: 384 })
-        .resize(size, size, { fit: 'contain' })
-        .png()
-        .toFile(path.join(OUT, file));
+      let img = sharp(Buffer.from(svg, 'utf8'), { density: 384 }).resize(size, size, {
+        fit: 'contain',
+      });
+      if (opaque) img = img.flatten({ background: FULLSEND_COLORS.void });
+      await img.png().toFile(path.join(OUT, file));
     }),
   );
 }

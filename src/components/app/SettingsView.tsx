@@ -51,6 +51,27 @@ export function SettingsView({
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmName, setConfirmName] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function deleteProject() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/projects/${project.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.message ?? `The server refused the delete (${res.status}).`);
+      }
+      // Onboarding is where a founder with no project belongs.
+      router.replace('/onboarding');
+      router.refresh();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+      setDeleting(false);
+    }
+  }
 
   async function save() {
     setBusy(true);
@@ -217,6 +238,41 @@ export function SettingsView({
           <Cap ok={capabilities.videoRender} label="Automatic video rendering" off="Production packages only" />
           <Cap ok={capabilities.encryption} label="Token encryption key set" off="Required before connecting an account" />
         </ul>
+      </section>
+
+      {/*
+        Deleting a project is how a founder actually exercises the deletion
+        right the privacy policy promises, so it has to be a control they can
+        find — not just an API endpoint. Typing the name is the guard: this
+        cascades to every row hanging off the project and cannot be undone.
+      */}
+      <section className="panel mt-6 border-fail/40 p-5">
+        <span className="label text-fail">Delete this project</span>
+        <p className="mt-2 text-sm text-dim">
+          Removes the repository analysis, strategy, every piece of content, the connected accounts
+          and their tokens, the schedule, and all collected analytics. Posts already live on
+          Instagram or TikTok stay up — delete those on the platform.
+        </p>
+        <p className="mt-2 text-sm text-dim">
+          Type <strong className="text-mist">{project.name}</strong> to confirm.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            value={confirmName}
+            onChange={(e) => setConfirmName(e.target.value)}
+            placeholder={project.name}
+            aria-label={`Type ${project.name} to confirm deletion`}
+            className="min-w-0 flex-1 border border-edge bg-void px-3 py-2 font-mono text-sm text-mist placeholder:text-dimmer focus:border-fail focus:outline-none"
+          />
+          <button
+            onClick={deleteProject}
+            disabled={confirmName !== project.name || deleting}
+            className="border border-fail px-4 py-2 font-mono text-xs uppercase tracking-wider text-fail transition-colors hover:bg-fail hover:text-void disabled:pointer-events-none disabled:opacity-40"
+          >
+            {deleting ? 'Deleting…' : 'Delete forever'}
+          </button>
+        </div>
+        {deleteError && <p className="mt-2 text-sm text-fail">{deleteError}</p>}
       </section>
 
       <section className="mt-8 border-t border-edge pt-6">
