@@ -159,6 +159,28 @@ export async function GET(): Promise<NextResponse> {
     );
   }
 
+  /*
+   * Reported on its own, not only through reviewBlockers.
+   *
+   * The blocker above is gated on a TikTok client key being present, which
+   * seemed reasonable — no point nagging a deployment that never touches
+   * TikTok. But URL verification comes *first* in TikTok's setup: you verify
+   * the host before the app details form will save, which is well before
+   * anyone has pasted credentials into their hosting dashboard. So the one
+   * moment the answer is wanted is exactly the moment the gate holds it shut,
+   * and an empty reviewBlockers list reads as "nothing wrong" when it actually
+   * means "not checked".
+   *
+   * An unconditional field cannot do that. It says what is true either way.
+   */
+  const tiktokVerification = {
+    configured: set(env.tiktok.verificationCode),
+    servedAt: '/tiktok-developers-site-verification.txt',
+    note: set(env.tiktok.verificationCode)
+      ? 'Serving. If TikTok still rejects it, the string does not match the file it issued.'
+      : 'Not serving — that path returns 404. Set TIKTOK_VERIFICATION_CODE and redeploy; adding the variable alone does not change the running deployment.',
+  };
+
   return NextResponse.json(
     {
       ok: problems.length === 0,
@@ -174,6 +196,8 @@ export async function GET(): Promise<NextResponse> {
       problems,
       /** Anything that would fail a TikTok or Meta app review. */
       reviewBlockers,
+      /** Whether TikTok's URL-ownership file is actually being served. */
+      tiktokVerification,
     },
     { headers: { 'Cache-Control': 'no-store' } },
   );

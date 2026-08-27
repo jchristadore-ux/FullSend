@@ -70,3 +70,66 @@ describe('tiktok site verification file', () => {
     expect(res.headers.get('cache-control')).toContain('no-store');
   });
 });
+
+/**
+ * The health endpoint has to answer this without a gate.
+ *
+ * The blocker for a missing verification code was gated on a TikTok client key
+ * being present — reasonable-looking, since a deployment that never touches
+ * TikTok does not need nagging. But URL verification comes *first* in TikTok's
+ * setup: you verify the host before the app details form will save, which is
+ * well before anyone has pasted credentials into their hosting dashboard.
+ *
+ * So the one moment the answer was wanted was exactly the moment the gate held
+ * it shut, and an empty reviewBlockers list read as "nothing is wrong" when it
+ * actually meant "not checked". This pins the unconditional report that
+ * replaced it.
+ */
+describe('health reports the verification file state', () => {
+  const originals = {
+    code: process.env.TIKTOK_VERIFICATION_CODE,
+    key: process.env.TIKTOK_CLIENT_KEY,
+  };
+
+  afterEach(() => {
+    for (const [name, value] of [
+      ['TIKTOK_VERIFICATION_CODE', originals.code],
+      ['TIKTOK_CLIENT_KEY', originals.key],
+    ] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  async function health(env: Record<string, string | undefined>) {
+    vi.resetModules();
+    for (const [name, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    const { GET } = await import('@/app/api/health/route');
+    return (await GET()).json();
+  }
+
+  it('says it is not serving when the code is missing, with no TikTok key set', async () => {
+    // The exact situation the gated check could not report on.
+    const body = await health({
+      TIKTOK_VERIFICATION_CODE: undefined,
+      TIKTOK_CLIENT_KEY: undefined,
+    });
+
+    expect(body.tiktokVerification.configured).toBe(false);
+    expect(body.tiktokVerification.note).toContain('404');
+    expect(body.tiktokVerification.servedAt).toBe('/tiktok-developers-site-verification.txt');
+  });
+
+  it('says it is serving once the code is set', async () => {
+    const body = await health({
+      TIKTOK_VERIFICATION_CODE: 'tiktok-developers-site-verification=abc',
+      TIKTOK_CLIENT_KEY: undefined,
+    });
+
+    expect(body.tiktokVerification.configured).toBe(true);
+    expect(body.tiktokVerification.note).toContain('does not match');
+  });
+});
