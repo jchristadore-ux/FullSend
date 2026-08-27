@@ -23,8 +23,14 @@ export const metadata: Metadata = {
     'app marketing',
   ],
   icons: {
-    icon: [{ url: '/brand/favicon.svg', type: 'image/svg+xml' }],
-    apple: [{ url: '/brand/fullsend-app-icon.svg' }],
+    icon: [
+      { url: '/brand/favicon.svg', type: 'image/svg+xml' },
+      { url: '/brand/fullsend-app-icon-192.png', sizes: '192x192', type: 'image/png' },
+    ],
+    // PNG, not the SVG this used to point at: iOS accepts only PNG or JPEG for
+    // a touch icon and ignores anything else without complaint, then puts a
+    // screenshot of the page on the home screen instead.
+    apple: [{ url: '/brand/fullsend-app-icon-180.png', sizes: '180x180', type: 'image/png' }],
   },
   openGraph: {
     title: 'FullSend — Everything goes live.',
