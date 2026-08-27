@@ -187,11 +187,37 @@ means FullSend works the same on every Vercel plan.
    - `FULLSEND_URL` — your deployed URL, e.g. `https://your-app.vercel.app`
    - `FULLSEND_CRON_SECRET` — the same value you set for `CRON_SECRET` in Vercel
 2. Open the **Actions** tab and enable workflows if prompted. **FullSend
-   heartbeat** then runs every five minutes.
+   heartbeat** then starts running on its own.
 
 To check it is working, open **Actions → FullSend heartbeat → Run workflow** and
 pick `queue`. A green run means the schedule is live. The Control Room
 (`/admin`) also shows queue depth and the oldest waiting job.
+
+#### How punctual this actually is
+
+The workflow asks for every five minutes. GitHub does not promise that, and in
+practice does not deliver it: scheduled workflows are best-effort and are
+delayed or dropped when the shared runners are busy. On a real free-tier
+deployment, measured over thirty hours, the gap between runs had a median of
+about **40 minutes**, a best of 9, and a worst of **5 hours 44** overnight —
+roughly 29 runs where a true five-minute schedule would be 288.
+
+Nothing is lost. Publishing picks up everything already due, so a post goes out
+at the next run rather than being skipped. It goes out **late** — usually inside
+an hour, sometimes several hours if it was scheduled overnight.
+
+If publishing on time matters to you, drive the schedule from something that
+guarantees it:
+
+- **An external pinger** — a free scheduler like cron-job.org or Upstash QStash
+  calling `https://your-app.vercel.app/api/cron/queue` and `/api/cron/publish`
+  with the `Authorization: Bearer $CRON_SECRET` header. Same endpoints, same
+  secret, reliable timing, no plan change.
+- **Vercel Pro** — native crons fire on time. See "Using Vercel's own cron jobs
+  instead" below, and disable the workflow so nothing runs twice.
+
+Either way, keep the heartbeat as a backstop or turn it off deliberately — do
+not leave both driving the queue without knowing it.
 
 The cron endpoints refuse any request without `CRON_SECRET`, so leaving it unset
 stops the jobs rather than exposing them.
@@ -377,9 +403,9 @@ the work.
 **Your browser does not need to be open.** FullSend runs on a schedule on the
 server.
 
-| Job | How often | What it does |
+| Job | Asked for | What it does |
 |---|---|---|
-| `/api/cron/queue` | every minute | Works through the job queue |
+| `/api/cron/queue` | every 5 minutes | Works through the job queue |
 | `/api/cron/publish` | every 5 minutes | Publishes anything due |
 | `/api/cron/daily` | daily | The full autopilot loop |
 | `/api/cron/weekly` | weekly | The Weekly Send Report |
@@ -387,8 +413,11 @@ server.
 
 The bundled **FullSend heartbeat** GitHub Actions workflow drives all of these —
 see [step 4 of the deploy guide](#step-4--make-the-background-jobs-run). It works
-on every Vercel plan, including the free one. On Vercel Pro you can swap to
-native crons instead; the deploy guide has the config.
+on every Vercel plan, including the free one.
+
+"Asked for" is the word that matters: GitHub schedules are best-effort, and the
+five-minute ones land closer to every 40 in practice. Step 4 has the measured
+numbers and two ways to get real punctuality if you need it.
 
 **Hosting elsewhere?** Either point your own scheduler at those URLs (sending
 `Authorization: Bearer $CRON_SECRET`) or run `npm run worker` as a long-lived
@@ -472,9 +501,9 @@ Check, in order: is a platform connected (Accounts), is the strategy approved
 the background jobs can run.
 
 If all of those look right, the schedule itself is probably not running. Check
-the **Actions** tab — the **FullSend heartbeat** workflow should show runs every
-five minutes. If it is disabled, or its two secrets are missing, posts sit in
-the queue looking correct while their send time passes. See
+the **Actions** tab — the **FullSend heartbeat** workflow should show a run
+within the last hour or so. If it is disabled, or its two secrets are missing,
+posts sit in the queue looking correct while their send time passes. See
 [step 4](#step-4--make-the-background-jobs-run). The Control Room at `/admin`
 confirms it either way: a growing queue with an old "oldest queued job" means
 nothing is draining it.
