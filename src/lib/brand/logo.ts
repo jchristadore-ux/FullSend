@@ -207,7 +207,17 @@ export function fullsendFaviconSvg(): string {
 }
 
 /** App icon: rounded square, dark ground, orange-forward compact symbol. */
-export function fullsendAppIconSvg(size = 1024): string {
+/**
+ * The home-screen icon.
+ *
+ * `maskable` drops the rounded corners and fills the square edge to edge.
+ * Android crops an adaptive icon to whatever shape the launcher uses, so an
+ * icon that rounds its own corners gets rounded twice and shows bare gaps at
+ * the sides. The mark sits well inside the middle 80% either way, which is the
+ * region every mask is guaranteed to keep.
+ */
+export function fullsendAppIconSvg(size = 1024, opts: { maskable?: boolean } = {}): string {
+  const corner = opts.maskable ? 0 : 114;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="${size}" height="${size}" role="img" aria-label="FullSend">
 <title>FullSend</title>
 <defs>
@@ -216,7 +226,7 @@ export function fullsendAppIconSvg(size = 1024): string {
     <stop offset="100%" stop-color="${FULLSEND_COLORS.void}"/>
   </linearGradient>
 </defs>
-<rect width="512" height="512" rx="114" fill="url(#fsIconBg)"/>
+<rect width="512" height="512" rx="${corner}" fill="url(#fsIconBg)"/>
 <g transform="translate(102 102) scale(3.08)">${fullsendSymbolPaths('dark', true)}</g>
 </svg>`;
 }

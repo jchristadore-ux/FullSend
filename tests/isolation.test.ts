@@ -19,7 +19,7 @@ import { signInRemedy } from '@/lib/auth/signin-errors';
 import { isSchemaMissing } from '@/lib/db/supabase-store';
 import { failureRemedy } from '@/lib/jobs/failure-remedy';
 import { isBillingFailure, providerMessage } from '@/lib/ai/provider-errors';
-import { fullsendLockupSvg, fullsendIconSvg, fullsendFaviconSvg } from '@/lib/brand/logo';
+import { fullsendLockupSvg, fullsendIconSvg, fullsendFaviconSvg, fullsendAppIconSvg } from '@/lib/brand/logo';
 import type { Project, User } from '@/lib/types';
 
 describe('tenant isolation', () => {
@@ -512,5 +512,30 @@ describe('reading a vendor API failure', () => {
     expect(isBillingFailure('Your credit balance is too low')).toBe(true);
     expect(isBillingFailure('You exceeded your current quota, please check your plan')).toBe(true);
     expect(isBillingFailure('overloaded_error')).toBe(false);
+  });
+});
+
+describe('the home-screen icon', () => {
+  it('is full-bleed when it will be masked, rounded when it will not', () => {
+    // iOS and Android both apply their own shape. Corners in the source get
+    // rounded twice and leave notches, which is why maskable drops them.
+    expect(fullsendAppIconSvg(180, { maskable: true })).toContain('rx="0"');
+    expect(fullsendAppIconSvg(512)).toContain('rx="114"');
+  });
+
+  it('keeps the mark inside the area every mask preserves', () => {
+    // Launchers guarantee only the middle 80% — 51.2 to 460.8 of a 512 box.
+    // The mark is drawn from 102 at scale 3.08 over a ~96-unit symbol.
+    const start = 102;
+    const end = 102 + 96 * 3.08;
+    expect(start).toBeGreaterThan(51.2);
+    expect(end).toBeLessThan(460.8);
+    expect(fullsendAppIconSvg(512, { maskable: true })).toContain('translate(102 102) scale(3.08)');
+  });
+
+  it('carries the electric orange, whatever the size', () => {
+    for (const size of [180, 192, 512]) {
+      expect(fullsendAppIconSvg(size)).toContain('#FF5A1F');
+    }
   });
 });
