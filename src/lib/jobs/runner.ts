@@ -265,6 +265,28 @@ export async function runJob(job: Job): Promise<{ status: 'succeeded' | 'failed'
       locked_at: null,
       updated_at: nowIso(),
     });
+
+    /*
+     * Record it now, not only when the retries run out.
+     *
+     * This used to be written on death alone, so a job failing its way through
+     * five attempts produced nothing anywhere the founder could see: the row
+     * reads `queued`, the Send Center only listed fatal errors, and the
+     * Control Room was a separate page. With the queue draining every few
+     * minutes at best, reaching the fifth attempt takes hours — hours during
+     * which an expired key or an empty credit balance is completely invisible
+     * and pressing the button again is the only available move.
+     *
+     * `fatal` stays false while there are attempts left, so it still reads as
+     * "retrying" rather than "given up".
+     */
+    await recordError(scope, {
+      projectId: job.project_id,
+      scope: `job:${job.type}`,
+      message,
+      remedy: isFullSendError(e) ? e.remedy : null,
+      fatal: false,
+    });
     log.warn('job failed, requeued', {
       id: job.id,
       type: job.type,

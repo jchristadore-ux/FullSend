@@ -135,10 +135,27 @@ export async function loadSendCenter(
       remedy: `Reconnect ${a.platform} and FullSend resumes publishing automatically.`,
     }));
 
+  /*
+   * Retrying failures belong here too.
+   *
+   * This used to list only `fatal` errors — the ones written when a job gives
+   * up for good. A job on its second of five attempts was therefore invisible,
+   * which is the worst moment to be quiet: it is still failing, the founder is
+   * still pressing the button, and nothing on the screen accounts for it.
+   *
+   * Deduplicated by message, because a retrying job records the same failure
+   * on every attempt and five copies of one problem reads as five problems.
+   */
+  const seen = new Set(attention.map((a) => a.message));
   for (const err of errors as AutomationError[]) {
-    if (err.fatal && !attention.some((x) => err.scope.includes(x.platform))) {
-      attention.push({ platform: err.scope, message: err.message, remedy: err.remedy });
-    }
+    if (seen.has(err.message)) continue;
+    if (attention.some((x) => err.scope.includes(x.platform))) continue;
+    seen.add(err.message);
+    attention.push({
+      platform: err.scope,
+      message: err.message,
+      remedy: err.remedy ?? (err.fatal ? null : 'FullSend is retrying this automatically.'),
+    });
   }
 
   return {

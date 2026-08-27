@@ -73,13 +73,52 @@ export async function getSession(): Promise<Session | null> {
         email: user.email ?? '',
         name: (user.user_metadata?.full_name as string) ?? null,
         avatar_url: (user.user_metadata?.avatar_url as string) ?? null,
-        is_admin: env.admin.emails.includes((user.email ?? '').toLowerCase()),
+        is_admin: isAdminEmail(user.email),
         created_at: nowIso(),
       });
+    } else {
+      row = await reconcileAdmin(sys, row);
     }
     return { user: row, scope: userScope(row.id) };
   }
   return getDevSession();
+}
+
+export function isAdminEmail(email: string | null | undefined): boolean {
+  return env.admin.emails.includes((email ?? '').toLowerCase());
+}
+
+/**
+ * What `users.is_admin` should become, or null to leave it alone.
+ *
+ * The flag used to be written once, when the row was first inserted, and never
+ * looked at again. So setting FULLSEND_ADMIN_EMAILS after signing in did
+ * nothing at all: the row already existed, and the Control Room stayed locked
+ * for the person who owned the deployment — with no way to tell from outside
+ * that the setting had been read and discarded rather than never applied.
+ *
+ * The list is now authoritative in both directions whenever it is set: being
+ * on it grants access, coming off it takes access away, both on the next
+ * request. An empty list means "not configured" and is left alone rather than
+ * read as "nobody is an admin" — that reading would revoke a flag an operator
+ * had deliberately set in SQL.
+ *
+ * Takes the list as an argument rather than reading the environment, so the
+ * rule can be tested directly. This decides who reaches the Control Room, and
+ * a rule that cannot be tested is a rule nobody has checked.
+ */
+export function nextAdminFlag(
+  row: { email: string; is_admin: boolean },
+  adminEmails: string[],
+): boolean | null {
+  if (adminEmails.length === 0) return null;
+  const shouldBeAdmin = adminEmails.includes(row.email.toLowerCase());
+  return shouldBeAdmin === row.is_admin ? null : shouldBeAdmin;
+}
+
+async function reconcileAdmin(scope: TenantScope, row: User): Promise<User> {
+  const next = nextAdminFlag(row, [...env.admin.emails]);
+  return next === null ? row : db().update(scope, 'users', row.id, { is_admin: next });
 }
 
 export async function requireSession(): Promise<Session> {
