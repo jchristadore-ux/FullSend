@@ -19,6 +19,11 @@ import { approveStrategy, buildStrategy } from '@/lib/strategy/build';
 import { generationBlocker, topUpContent } from '@/lib/automation/autopilot';
 import { longerWindowHelps } from '@/lib/content/blockers';
 import { describeGenerationOutcome } from '@/lib/jobs/generation-outcome';
+import { db, enqueue, recordError } from '@/lib/db/repo';
+import { systemScope } from '@/lib/db';
+import { runJob } from '@/lib/jobs/runner';
+import { loadSendCenter } from '@/lib/dashboard';
+import { nowIso } from '@/lib/ids';
 import type { Project } from '@/lib/types';
 
 describe('generation blockers', () => {
@@ -145,5 +150,80 @@ describe('what the generate button says', () => {
     expect(
       describeGenerationOutcome({ status: 'succeeded', result: { generated: 18, blockedByQc: 6 } }, 30),
     ).toBe('Wrote 18 posts. 6 held for your review.');
+  });
+});
+
+/**
+ * A failure that is still retrying has to be visible while it retries.
+ *
+ * The error used to be recorded only when a job exhausted its attempts. Until
+ * then the row read `queued`, the Send Center listed fatal errors only, and
+ * nothing anywhere accounted for the failure — through five attempts and, at
+ * the queue's real cadence, several hours. That is precisely the window in
+ * which a founder is pressing the button and getting nothing.
+ */
+describe('a retrying job is not silent', () => {
+  let ctx: TestContext;
+  let project: Project;
+
+  beforeEach(async () => {
+    ctx = await setupContext();
+    project = await createProject(ctx.scope, ctx.user.id);
+  });
+  afterEach(() => teardown());
+
+  it('records the error on the first failure, not only on the last', async () => {
+    const sys = systemScope('test');
+    // A job whose project does not exist fails deterministically, and has
+    // attempts left, so it is requeued rather than killed.
+    await enqueue(sys, 'daily_autopilot', { projectId: 'does-not-exist' }, {
+      projectId: project.id,
+      maxAttempts: 5,
+    });
+
+    const claimed = await db().claimNextJob(nowIso(), 60_000);
+    expect((await runJob(claimed!)).status).toBe('failed');
+
+    const errors = await db().find(sys, 'automation_errors', {
+      where: { project_id: project.id },
+    });
+    expect(errors).toHaveLength(1);
+    // Not fatal: it has attempts left and is genuinely still retrying.
+    expect(errors[0].fatal).toBe(false);
+    expect(errors[0].message).toBeTruthy();
+  });
+
+  it('shows that error on the Send Center while it is still retrying', async () => {
+    const sys = systemScope('test');
+    await recordError(sys, {
+      projectId: project.id,
+      scope: 'job:generate_content',
+      message: 'Your credit balance is too low to access the Anthropic API.',
+      remedy: null,
+      fatal: false,
+    });
+
+    const data = await loadSendCenter(ctx.scope, project);
+    expect(data.attention).toHaveLength(1);
+    expect(data.attention[0].message).toContain('credit balance');
+    expect(data.attention[0].remedy).toContain('retrying');
+  });
+
+  it('collapses the same failure repeated across attempts into one item', async () => {
+    const sys = systemScope('test');
+    const message = 'Your credit balance is too low to access the Anthropic API.';
+    for (let i = 0; i < 3; i++) {
+      await recordError(sys, {
+        projectId: project.id,
+        scope: 'job:generate_content',
+        message,
+        remedy: null,
+        fatal: false,
+      });
+    }
+
+    const data = await loadSendCenter(ctx.scope, project);
+    // Three attempts at one problem is one problem.
+    expect(data.attention).toHaveLength(1);
   });
 });
