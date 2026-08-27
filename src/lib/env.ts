@@ -87,6 +87,16 @@ export const env = {
     authHost: opt('TIKTOK_AUTH_HOST') ?? 'https://www.tiktok.com',
     /** Set true once TikTok has audited the client; gates PUBLIC_TO_EVERYONE. */
     audited: opt('TIKTOK_CLIENT_AUDITED') === 'true',
+    /**
+     * Signature served at /tiktok-developers-site-verification.txt.
+     *
+     * TikTok will not accept a Terms, Privacy or media URL on a host it has
+     * not verified. DNS verification needs a zone you control, which rules it
+     * out on *.vercel.app, so the file is the only way in until there is a
+     * custom domain. Public by design — it is a proof of ownership TikTok
+     * fetches anonymously, not a credential.
+     */
+    verificationCode: opt('TIKTOK_VERIFICATION_CODE'),
   },
 
   stripe: {
