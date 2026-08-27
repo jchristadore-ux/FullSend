@@ -153,6 +153,11 @@ export async function GET(): Promise<NextResponse> {
       'FULLSEND_CONTACT_EMAIL is not set — /privacy, /terms and /data-deletion have no contact address, and both TikTok and Meta reject apps whose policies name nobody reachable.',
     );
   }
+  if (set(env.tiktok.clientKey) && !set(env.tiktok.verificationCode)) {
+    reviewBlockers.push(
+      'TIKTOK_VERIFICATION_CODE is not set — /tiktok-developers-site-verification.txt returns 404, so TikTok cannot verify this host and will reject the Terms and Privacy URLs as unverified.',
+    );
+  }
 
   return NextResponse.json(
     {
