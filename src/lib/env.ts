@@ -64,8 +64,19 @@ export const env = {
     graphVersion: opt('META_GRAPH_VERSION') ?? 'v23.0',
     graphHost: opt('META_GRAPH_HOST') ?? 'https://graph.facebook.com',
     instagramGraphHost: opt('INSTAGRAM_GRAPH_HOST') ?? 'https://graph.instagram.com',
-    /** `instagram_login` (Instagram API with Instagram Login) or `facebook_login`. */
-    loginMode: (opt('META_LOGIN_MODE') ?? 'facebook_login') as 'instagram_login' | 'facebook_login',
+    /*
+     * `instagram_login` (Instagram API with Instagram Login) or
+     * `facebook_login`.
+     *
+     * Instagram Login is the default because it is the one whose permissions
+     * still exist. Meta retired `instagram_basic` and `instagram_content_publish`
+     * on 27 January 2025 in favour of the `instagram_business_*` names, and
+     * those are what the Instagram Login path asks for. It is also the simpler
+     * setup — no Facebook Page in the middle. Choose `facebook_login` only for
+     * managing several accounts through Business Manager, and check its scope
+     * names against Meta's current documentation first.
+     */
+    loginMode: (opt('META_LOGIN_MODE') ?? 'instagram_login') as 'instagram_login' | 'facebook_login',
     webhookVerifyToken: opt('META_WEBHOOK_VERIFY_TOKEN'),
   },
 
