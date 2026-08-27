@@ -34,7 +34,15 @@ import {
 
 const log = logger('instagram');
 
-/** Current permission names. The pre-2025 `instagram_basic` scopes are gone. */
+/*
+ * ⚠ These are the pre-2025 names. Meta retired `instagram_basic` and
+ * `instagram_content_publish` on 27 January 2025, replacing them with the
+ * `instagram_business_*` permissions below. This list is kept only for the
+ * Facebook-Login-for-Business path, which is no longer the default; check it
+ * against Meta's current documentation before submitting an App Review that
+ * relies on it, or a review can be spent to be told the permission no longer
+ * exists.
+ */
 export const INSTAGRAM_SCOPES_FACEBOOK_LOGIN = [
   'instagram_basic',
   'instagram_content_publish',
@@ -44,6 +52,7 @@ export const INSTAGRAM_SCOPES_FACEBOOK_LOGIN = [
   'business_management',
 ];
 
+/** The current permissions, and what the default login mode asks for. */
 export const INSTAGRAM_SCOPES_INSTAGRAM_LOGIN = [
   'instagram_business_basic',
   'instagram_business_content_publish',

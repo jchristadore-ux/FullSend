@@ -47,6 +47,8 @@ export const INSTAGRAM_SETUP: SetupGuide = {
     'account automatically, and reads back reach, likes, comments, shares and saves.',
   caveats: [
     'Instagram Business account only — Creator accounts cannot use content publishing.',
+    'No Facebook Page required on the default setup. FullSend uses Instagram Login, which ' +
+      'connects to the account directly.',
     'Instagram caps API publishing at 100 posts per rolling 24 hours.',
     'Meta App Review typically takes 2–4 weeks for the publishing permission.',
   ],
@@ -60,19 +62,14 @@ export const INSTAGRAM_SETUP: SetupGuide = {
       verifiable: true,
     },
     {
-      title: 'Link it to a Facebook Page',
-      detail:
-        'Instagram app: Settings → Sharing and remixes → Facebook, and connect a Page you admin. ' +
-        'Meta routes publishing through the Page, so this link is mandatory.',
-      href: 'https://www.facebook.com/pages/create',
-      verifiable: true,
-    },
-    {
       title: 'Create a Meta app',
       detail:
         'At developers.facebook.com, create an app of type Business, then add the Instagram ' +
         'product to it. Copy the App ID and App Secret into your FullSend environment as ' +
-        'META_APP_ID and META_APP_SECRET.',
+        'META_APP_ID and META_APP_SECRET. No Facebook Page is needed: FullSend uses Instagram ' +
+        'Login, which talks to your Instagram account directly. Only META_LOGIN_MODE=' +
+        'facebook_login routes through a Page, and that is for running several accounts ' +
+        'through Business Manager.',
       href: 'https://developers.facebook.com/apps/create/',
       copyValues: [{ label: 'OAuth redirect URI', valueKey: 'instagram_redirect_uri' }],
       verifiable: true,
@@ -91,7 +88,9 @@ export const INSTAGRAM_SETUP: SetupGuide = {
         'App Review → Permissions and Features. Request instagram_business_basic, ' +
         'instagram_business_content_publish and instagram_business_manage_insights. You will ' +
         'need a screencast of the publishing flow and a privacy policy URL. Until this is ' +
-        'approved, only accounts listed as app testers can be connected.',
+        'approved, only accounts listed as app testers can be connected. Request exactly these ' +
+        'three: the older instagram_basic and instagram_content_publish were retired on ' +
+        '27 January 2025 and asking for them spends a review to be told they no longer exist.',
       href: 'https://developers.facebook.com/docs/app-review',
       waitTime: '2–4 weeks',
       verifiable: false,
