@@ -113,6 +113,18 @@ export const env = {
     apiKey: opt('FULLSEND_VIDEO_API_KEY'),
   },
 
+  /**
+   * Address published on the Terms, Privacy and Data Deletion pages.
+   *
+   * Required before submitting to TikTok or Meta: both reviewers check that a
+   * policy names someone reachable, and reject the app if it does not. Left
+   * unset the pages say so rather than inventing an address.
+   */
+  contactEmail: opt('FULLSEND_CONTACT_EMAIL'),
+
+  /** Legal entity named in the policies. Falls back to the product name. */
+  legalEntity: opt('FULLSEND_LEGAL_ENTITY') ?? 'FullSend',
+
   admin: {
     /** Comma-separated emails allowed into the FullSend Control Room. */
     emails: (opt('FULLSEND_ADMIN_EMAILS') ?? '')

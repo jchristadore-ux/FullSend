@@ -504,6 +504,12 @@ function Footer() {
             <a href="#pricing" className="transition-colors hover:text-mist">
               Pricing
             </a>
+            <Link href="/terms" className="transition-colors hover:text-mist">
+              Terms
+            </Link>
+            <Link href="/privacy" className="transition-colors hover:text-mist">
+              Privacy
+            </Link>
             <SignInLink className="transition-colors hover:text-mist" />
           </div>
         </div>

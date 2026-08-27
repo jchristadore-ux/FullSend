@@ -181,6 +181,25 @@ export class MemoryStore implements Store {
     if (!row) return;
     await this.assertAccess(scope, table, row);
     this.table(table).delete(id);
+    if (table === 'projects') this.cascadeFromProject(id);
+  }
+
+  /**
+   * Deletes everything hanging off a project, the way Postgres does.
+   *
+   * Every table that references `projects(id)` in the migration declares
+   * `on delete cascade`, so under Supabase one delete clears all of it —
+   * including the encrypted tokens. Without this the memory driver would leave
+   * those rows behind, and the two drivers would disagree about what "delete
+   * this project" means. They must not: it is the control the privacy policy
+   * points at.
+   */
+  private cascadeFromProject(projectId: Uuid): void {
+    for (const rows of this.tables.values()) {
+      for (const [rowId, row] of rows) {
+        if ((row as { project_id?: Uuid }).project_id === projectId) rows.delete(rowId);
+      }
+    }
   }
 
   async count<K extends TableName>(
