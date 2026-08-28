@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { requireAdmin } from '@/lib/auth/session';
+import { getSession } from '@/lib/auth/session';
+import { redirect } from 'next/navigation';
 import { systemScope } from '@/lib/db';
 import { db } from '@/lib/db/repo';
 import { queueStats } from '@/lib/jobs/runner';
@@ -14,7 +15,19 @@ export const dynamic = 'force-dynamic';
 export const metadata = { title: 'FullSend Control Room' };
 
 export default async function ControlRoom() {
-  await requireAdmin();
+  /*
+   * Refused, not crashed.
+   *
+   * This threw `unauthorized()`, which nothing above it catches, so a visitor
+   * without the flag got Next's generic "a server error occurred" — the same
+   * page a genuine crash produces. That is a bad answer anywhere and a
+   * actively misleading one here: the Control Room is where you go to find out
+   * why something is broken, so its own failure mode read as more breakage.
+   */
+  const session = await getSession();
+  if (!session) redirect('/login?next=/admin');
+  if (!session.user.is_admin) return <NotAnAdmin email={session.user.email} />;
+
   const scope = systemScope('control room');
 
   const [
@@ -386,5 +399,39 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <dt className="text-dimmer">{label}</dt>
       <dd className="text-mist">{children}</dd>
     </div>
+  );
+}
+
+/**
+ * Says who you are and what would change it.
+ *
+ * Naming the address matters: the flag is matched against FULLSEND_ADMIN_EMAILS
+ * exactly, and the usual reason for being refused is that the list holds a
+ * different address from the one you signed in with.
+ */
+function NotAnAdmin({ email }: { email: string }) {
+  return (
+    <main className="mx-auto max-w-2xl px-5 py-20">
+      <span className="label">Control Room</span>
+      <h1 className="mt-3 font-display text-3xl font-extrabold tracking-tight text-mist">
+        This account is not an admin.
+      </h1>
+      <p className="mt-4 text-dim">
+        You are signed in as{' '}
+        <strong className="font-mono text-sm text-mist">{email}</strong>. The Control Room is
+        limited to the addresses in <code className="font-mono text-xs text-orange">FULLSEND_ADMIN_EMAILS</code>.
+      </p>
+      <p className="mt-3 text-dim">
+        Add that address to the variable in your hosting environment and redeploy. It applies on
+        your next request — no need to sign out and back in.
+      </p>
+      <p className="mt-6 text-sm text-dimmer">
+        Everything about your own project is on the{' '}
+        <Link href="/app" className="text-orange hover:underline">
+          Send Center
+        </Link>{' '}
+        and does not need admin access.
+      </p>
+    </main>
   );
 }
