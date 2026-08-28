@@ -12,6 +12,7 @@
  */
 
 import { longerWindowHelps } from '../content/blockers';
+import { hasFailed } from './job-failure';
 
 export interface GenerationJob {
   status?: string;
@@ -27,26 +28,14 @@ export interface GenerationJob {
 }
 
 export function describeGenerationOutcome(job: GenerationJob, days: number): string {
-  if (job.status === 'dead') {
-    return job.error ?? 'That run failed. The Control Room at /admin has the details.';
-  }
-
   /*
-   * A retryable failure does not leave the job marked failed.
-   *
-   * The runner puts it straight back to `queued` with a backoff and the reason
-   * in `last_error`, so a status check sees "queued" and reports progress —
-   * every time, on every retry, while the real error sits unread on the row.
-   * That is how a broken run reads as "refresh in a moment" indefinitely: the
-   * refresh shows the same empty calendar and nothing says why.
-   *
-   * Attempts is what separates the two. A job that has never run has none.
+   * A retryable failure does not leave the job marked failed — `hasFailed`
+   * carries that rule, shared with the onboarding screen so the two cannot
+   * disagree about whether a job is slow or broken.
    */
-  if (job.status !== 'succeeded' && (job.attempts ?? 0) > 0 && job.error) {
-    return `That run failed and will retry: ${job.error}`;
-  }
-  if (job.status === 'failed') {
-    return job.error ?? 'That run failed. The Control Room at /admin has the details.';
+  if (hasFailed(job)) {
+    const reason = job.error ?? 'The Control Room at /admin has the details.';
+    return job.status === 'dead' ? reason : `That run failed and will retry: ${reason}`;
   }
   if (job.status !== 'succeeded') {
     return `Still working on a ${days}-day calendar — refresh in a moment.`;

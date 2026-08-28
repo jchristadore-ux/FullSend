@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Capabilities } from '@/lib/env';
 import type { AppScreen, Persona, ProductAnalysis, Repository } from '@/lib/types';
 import { failureRemedy } from '@/lib/jobs/failure-remedy';
+import { hasFailed, stillRunning, type JobProgress } from '@/lib/jobs/job-failure';
 
 /**
  * "What's your app?" → "FullSend is looking under the hood…" → "We've got it."
@@ -33,8 +34,8 @@ interface AnalyzeState {
   personas: Persona[];
   screenshots: { withImages: number; describedOnly: number; note: string } | null;
   jobs: {
-    analyze: { status: string; error: string | null } | null;
-    strategy: { status: string; error: string | null } | null;
+    analyze: JobProgress | null;
+    strategy: JobProgress | null;
   };
 }
 
@@ -63,7 +64,7 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
     if (s.jobs.strategy?.status === 'succeeded') return STEPS.length;
     if (s.jobs.strategy?.status === 'running') return 6;
     if (s.analysis) return 5;
-    if (s.jobs.analyze?.status === 'running') return 2;
+    if (stillRunning(s.jobs.analyze)) return 2;
     if (s.repository) return 1;
     return 0;
   }, []);
@@ -82,8 +83,10 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
         setState(json);
         setReachedStep((prev) => Math.max(prev, stepFor(json)));
 
-        const failed =
-          json.jobs.analyze?.status === 'dead' || json.jobs.strategy?.status === 'dead';
+        // Not just 'dead'. A retryable failure requeues as 'queued', so
+        // waiting for 'dead' meant spinning through every attempt and its
+        // backoff while the reason sat on the row, unread.
+        const failed = hasFailed(json.jobs.analyze) || hasFailed(json.jobs.strategy);
         if (failed) {
           stopPolling();
           const message =
