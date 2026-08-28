@@ -39,11 +39,13 @@ export const GET = projectRoute(async ({ session, project }) => {
     personas,
     screenshots: analysis ? screenshotAvailability(analysis) : null,
     jobs: {
+      // `attempts` matters: a requeued failure still reads as `queued`, and
+      // without it the progress screen cannot tell a slow job from a broken one.
       analyze: analyzeJob
-        ? { status: analyzeJob.status, error: analyzeJob.last_error }
+        ? { status: analyzeJob.status, attempts: analyzeJob.attempts, error: analyzeJob.last_error }
         : null,
       strategy: strategyJob
-        ? { status: strategyJob.status, error: strategyJob.last_error }
+        ? { status: strategyJob.status, attempts: strategyJob.attempts, error: strategyJob.last_error }
         : null,
     },
   };
