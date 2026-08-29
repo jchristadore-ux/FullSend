@@ -253,15 +253,6 @@ export function screenshotAvailability(analysis: ProductAnalysis): {
   };
 }
 
-/** Used by the onboarding progress stream. */
-export const ANALYSIS_STEPS = [
-  'Reading repository',
-  'Understanding product',
-  'Building the marketing plan',
-  'Writing the content',
-  'Building the schedule',
-] as const;
-
 export async function systemAnalyze(
   project: Project,
   repositoryInput: string,

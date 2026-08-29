@@ -2,7 +2,7 @@ import { LIMITS, projectRoute } from '@/lib/api/handler';
 import { z } from 'zod';
 import { db, enqueue, getAnalysis, getRepository } from '@/lib/db/repo';
 import { parseRepoInput } from '@/lib/github/client';
-import { screenshotAvailability, ANALYSIS_STEPS } from '@/lib/analysis/analyze';
+import { screenshotAvailability } from '@/lib/analysis/analyze';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -33,7 +33,6 @@ export const GET = projectRoute(async ({ session, project }) => {
 
   return {
     status: project.status,
-    steps: ANALYSIS_STEPS,
     repository,
     analysis,
     personas,

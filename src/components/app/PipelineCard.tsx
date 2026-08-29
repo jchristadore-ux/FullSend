@@ -126,8 +126,14 @@ export function PipelineCard({ projectId }: { projectId: string }) {
                   {WORD[stage.status]}
                 </span>
               </div>
-              {(stage.detail || stage.error) && (
-                <p className="mt-1 truncate text-xs text-dimmer">{stage.error ?? stage.detail}</p>
+              {stage.error ? (
+                // Not truncated. This is the sentence that says what to do next,
+                // and half of it is no use at all.
+                <p className="mt-1 whitespace-pre-wrap break-words text-xs text-warn">
+                  {stage.error}
+                </p>
+              ) : (
+                stage.detail && <p className="mt-1 truncate text-xs text-dimmer">{stage.detail}</p>
               )}
             </div>
 

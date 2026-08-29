@@ -4,9 +4,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Capabilities } from '@/lib/env';
-import type { AppScreen, Persona, ProductAnalysis, Repository } from '@/lib/types';
+import type { AppScreen, ProductAnalysis, Repository } from '@/lib/types';
 import { failureRemedy } from '@/lib/jobs/failure-remedy';
-import { hasFailed, stillRunning, type JobProgress } from '@/lib/jobs/job-failure';
 
 /**
  * "What's your app?" → "FullSend is looking under the hood…" → "We've got it."
@@ -15,13 +14,31 @@ import { hasFailed, stillRunning, type JobProgress } from '@/lib/jobs/job-failur
  * timer: a step only ticks over when that work has genuinely happened.
  */
 
-const STEPS = [
-  'Reading repository',
-  'Understanding product',
-  'Building the marketing plan',
-  'Writing the content',
-  'Building the schedule',
-];
+/**
+ * The stages, named once.
+ *
+ * This screen used to keep its own list of labels and map them onto whatever
+ * jobs happened to be running. That is how "Understanding the product" was
+ * still on screen, and still failing, after the pipeline behind it had been
+ * rebuilt: two descriptions of the same machine, one of them stale. The labels
+ * now come from the pipeline itself, so there is exactly one answer to what
+ * FullSend is doing.
+ */
+const STAGE_ORDER = ['analysis', 'marketing_plan', 'content', 'schedule'] as const;
+
+interface PipelineStage {
+  name: string;
+  label: string;
+  status: 'complete' | 'in_progress' | 'failed' | 'waiting' | 'not_started';
+  detail: string | null;
+  error: string | null;
+}
+
+interface Pipeline {
+  status: string;
+  stages: PipelineStage[];
+  failedStage: string | null;
+}
 
 type Phase = 'input' | 'working' | 'done' | 'error';
 
@@ -29,21 +46,15 @@ interface AnalyzeState {
   status: string;
   repository: Repository | null;
   analysis: ProductAnalysis | null;
-  personas: Persona[];
   screenshots: { withImages: number; describedOnly: number; note: string } | null;
-  jobs: {
-    analyze: JobProgress | null;
-    strategy: JobProgress | null;
-  };
 }
 
 /**
- * How long the checklist may sit on one step before it is called stuck.
+ * How long a stage may sit without moving before it is called stuck.
  *
- * Something that has not moved in three minutes is not slow, it is broken, and
- * a spinner that never resolves is the worst of the available answers: there is
- * nothing to read and nothing to press. Saying so turns it back into a screen
- * with a button on it.
+ * A spinner that never resolves is the worst of the available answers: nothing
+ * to read and nothing to press. Saying so turns it back into a screen with a
+ * button on it.
  */
 const STALL_MS = 3 * 60 * 1000;
 
@@ -55,7 +66,7 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
   const [state, setState] = useState<AnalyzeState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [remedy, setRemedy] = useState<string | null>(null);
-  const [reachedStep, setReachedStep] = useState(0);
+  const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const movedAtRef = useRef(Date.now());
   const lastStepRef = useRef(0);
@@ -69,21 +80,6 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
 
   useEffect(() => () => stopPolling(), [stopPolling]);
 
-  /**
-   * Maps real server state onto the visible checklist.
-   *
-   * Every rung is a distinct piece of work that has genuinely finished, and
-   * each one is a stage the founder can see and retry on its own.
-   */
-  const stepFor = useCallback((s: AnalyzeState): number => {
-    if (s.jobs.strategy?.status === 'succeeded') return STEPS.length;
-    if (stillRunning(s.jobs.strategy)) return 2;
-    if (s.analysis) return 2;
-    if (s.repository) return 1;
-    if (stillRunning(s.jobs.analyze)) return 1;
-    return 0;
-  }, []);
-
   const poll = useCallback(
     async (id: string) => {
       try {
@@ -91,51 +87,48 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
         // onboarding is not waiting on the next scheduled tick.
         await fetch(`/api/projects/${id}/tick`, { method: 'POST' }).catch(() => {});
 
-        const res = await fetch(`/api/projects/${id}/analyze`, { cache: 'no-store' });
-        const json: AnalyzeState = await res.json();
-        if (!res.ok) throw new Error((json as never as { message: string }).message);
+        const [pipeRes, stateRes] = await Promise.all([
+          fetch(`/api/projects/${id}/pipeline`, { cache: 'no-store' }),
+          fetch(`/api/projects/${id}/analyze`, { cache: 'no-store' }),
+        ]);
+        const pipe: Pipeline = await pipeRes.json();
+        const json: AnalyzeState = await stateRes.json();
+        if (!pipeRes.ok) throw new Error((pipe as never as { message: string }).message);
 
         setState(json);
+        setPipeline(pipe);
 
-        const step = stepFor(json);
-        if (step > lastStepRef.current) {
-          lastStepRef.current = step;
+        const reached = pipe.stages.filter((st) => st.status === 'complete').length;
+        if (reached > lastStepRef.current) {
+          lastStepRef.current = reached;
           movedAtRef.current = Date.now();
         }
-        setReachedStep((prev) => Math.max(prev, step));
 
-        // Not just 'dead'. A retryable failure requeues as 'queued', so
-        // waiting for 'dead' meant spinning through every attempt and its
-        // backoff while the reason sat on the row, unread.
-        const failed = hasFailed(json.jobs.analyze) || hasFailed(json.jobs.strategy);
+        // The stage that failed says so itself, with the provider's own words.
+        // Nothing is lost: everything before it is saved, and the retry starts
+        // from the stage that stopped rather than the beginning.
+        const failed = pipe.stages.find((st) => st.status === 'failed');
         if (failed) {
           stopPolling();
-          const message =
-            json.jobs.analyze?.error ?? json.jobs.strategy?.error ?? 'Analysis could not finish';
-          setError(message);
-          // Derived from what actually failed. A fixed line here told everyone
-          // to check their repository, including when the repository was fine
-          // and the AI account had simply run out of credit.
-          setRemedy(failureRemedy(message));
+          setError(`${failed.label} failed: ${failed.error ?? 'no reason given'}`);
+          setRemedy(failureRemedy(failed.error ?? ''));
           setPhase('error');
           return;
         }
 
-        if (json.analysis && json.jobs.strategy?.status === 'succeeded') {
+        if (pipe.stages.every((st) => st.status === 'complete')) {
           stopPolling();
-          setReachedStep(STEPS.length);
           setPhase('done');
           return;
         }
 
-        // Nothing has moved for long enough that nothing is going to. Say what
-        // it was waiting on, rather than spinning on it indefinitely.
         if (Date.now() - movedAtRef.current > STALL_MS) {
           stopPolling();
-          setError(`FullSend got stuck on "${STEPS[Math.min(step, STEPS.length - 1)]}".`);
+          const stuck = pipe.stages.find((st) => st.status !== 'complete');
+          setError(`FullSend got stuck on "${stuck?.label ?? 'the pipeline'}".`);
           setRemedy(
-            'Nothing was lost — every step that finished is saved. Press Analyze again and ' +
-              'it will pick up from where it stopped rather than starting over.',
+            'Nothing was lost — every stage that finished is saved. Press Analyze again and ' +
+              'it picks up from the stage that stopped rather than starting over.',
           );
           setPhase('error');
         }
@@ -145,7 +138,7 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
         setPhase('error');
       }
     },
-    [stepFor, stopPolling],
+    [stopPolling],
   );
 
   async function analyze(e: React.FormEvent) {
@@ -153,7 +146,7 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
     setError(null);
     setRemedy(null);
     setPhase('working');
-    setReachedStep(0);
+    setPipeline(null);
     lastStepRef.current = 0;
     movedAtRef.current = Date.now();
 
@@ -257,12 +250,18 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
         </h1>
 
         <ol className="mt-10 space-y-0">
-          {STEPS.map((step, i) => {
-            const done = i < reachedStep;
-            const active = i === reachedStep;
+          {(pipeline?.stages ?? STAGE_ORDER.map((name) => ({
+            name,
+            label: '',
+            status: 'waiting' as const,
+            detail: null,
+            error: null,
+          }))).map((st) => {
+            const done = st.status === 'complete';
+            const active = st.status === 'in_progress';
             return (
               <li
-                key={step}
+                key={st.name}
                 className={[
                   'flex items-center gap-3.5 border-b border-edge py-3.5 transition-opacity duration-300',
                   done || active ? 'opacity-100' : 'opacity-35',
@@ -286,8 +285,13 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
                     done ? 'text-mist' : active ? 'text-orange' : 'text-dimmer',
                   ].join(' ')}
                 >
-                  {step}
+                  {st.label || '…'}
                 </span>
+                {st.detail && (
+                  <span className="ml-auto truncate font-mono text-[11px] text-dimmer">
+                    {st.detail}
+                  </span>
+                )}
               </li>
             );
           })}
@@ -340,23 +344,6 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
         </ul>
       </Section>
 
-      <Section title="Who needs it" count={state!.personas.length}>
-        <ul className="space-y-3">
-          {state!.personas.map((p) => (
-            <li key={p.id} className="border-l-2 border-edge pl-3.5">
-              <p className="font-display text-sm font-bold tracking-tight text-mist">
-                {p.name} <span className="font-sans font-normal text-dimmer">· {p.role}</span>
-              </p>
-              <p className="text-sm text-dim">{p.description}</p>
-              {p.pain_points.length > 0 && (
-                <p className="mt-1 font-mono text-[10px] text-dimmer">
-                  pain: {p.pain_points.slice(0, 2).join(' · ')}
-                </p>
-              )}
-            </li>
-          ))}
-        </ul>
-      </Section>
 
       {analysis.screens.length > 0 && (
         <Section title="Screens it can film" count={analysis.screens.length}>
