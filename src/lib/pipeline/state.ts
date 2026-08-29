@@ -14,7 +14,7 @@
 import 'server-only';
 import { type TenantScope } from '../db';
 import { db, getAnalysis, getBrandProfile, getStrategy } from '../db/repo';
-import { hasFailed, stillRunning } from '../jobs/job-failure';
+import { hasFailed, isStalled, stillRunning } from '../jobs/job-failure';
 import type { JobType, Project, Uuid } from '../types';
 
 export type StageName = 'analysis' | 'marketing_plan' | 'content' | 'schedule';
@@ -126,6 +126,7 @@ export async function pipelineState(
       status: j!.status,
       attempts: j!.attempts,
       error: j!.last_error,
+      lockedAt: j!.locked_at,
     }));
 
     const failure = progress.find((p) => hasFailed(p));
@@ -154,7 +155,14 @@ export async function pipelineState(
       label: LABELS[name],
       status,
       detail: detail[name],
-      error: status === 'failed' ? (failure?.error ?? 'This step failed') : null,
+      error:
+        status === 'failed'
+          ? isStalled(failure)
+            ? 'This step was cut off part-way and never reported back. ' +
+              (failure?.error ? `Last error: ${failure.error}. ` : '') +
+              'Press Retry — everything already saved is kept.'
+            : (failure?.error ?? 'This step failed')
+          : null,
       retryable: status === 'failed' || status === 'not_started',
     });
   }

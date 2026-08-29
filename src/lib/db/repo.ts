@@ -6,6 +6,7 @@
  */
 
 import { newId, nowIso } from '../ids';
+import { isStalled } from '../jobs/job-failure';
 import type {
   AiUsageRecord,
   AnalyticsSnapshot,
@@ -302,9 +303,19 @@ export async function enqueueOnce(
       whereIn: { status: ['queued', 'running'] },
       orderBy: 'created_at',
       direction: 'asc',
-      limit: 1,
+      limit: 5,
     });
-    if (open.length) return { job: open[0], created: false };
+
+    /*
+     * A claim older than the lock timeout belongs to a worker that is gone.
+     * Counting it as in-flight is what made Retry do nothing: the row said
+     * `running` for ever, so no new job was created and the dead one was the
+     * answer to every request to start the stage again.
+     */
+    const live = open.find(
+      (j) => !isStalled({ status: j.status, lockedAt: j.locked_at }),
+    );
+    if (live) return { job: live, created: false };
     return { job: await enqueue(scope, type, payload, opts), created: true };
   } finally {
     release();
