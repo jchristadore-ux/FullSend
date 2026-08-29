@@ -11,7 +11,7 @@
  * the exact shape, and a notation mistake in the reply is repaired rather than
  * thrown away — without ever loosening what reaches the database.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { generateObject, setProvider } from '@/lib/ai/client';
 import { coerceToSchema } from '@/lib/ai/coerce';
@@ -276,5 +276,84 @@ describe('generating against a real reply', () => {
       noCache: true,
     });
     expect(data).toEqual({ ok: true });
+  });
+});
+
+/**
+ * Fitting inside the invocation that holds it.
+ *
+ * A serverless function is killed at sixty seconds. A model call allowed two
+ * minutes, or two calls of forty seconds each, outlives the function every
+ * time — and a killed function writes nothing down, which is why a failing
+ * stage reported "cut off part-way" with nothing after it.
+ */
+describe('staying inside the time it has', () => {
+  beforeEach(() => {
+    freshStore();
+    clearCache();
+  });
+
+  afterEach(() => {
+    teardown();
+    clearCache();
+  });
+
+  const options = {
+    task: 'analysis.product',
+    system: 'You are FullSend’s product analyst.',
+    brief: 'Work out what this is.',
+    context: {},
+    schema: productAnalysisSchema,
+  };
+
+  it('does not spend a second call it does not have time for', async () => {
+    /** Answers badly, and slowly enough that a repair turn would not fit. */
+    const slow: AiProvider = {
+      name: 'slow',
+      live: true,
+      modelFor: () => 'slow-model',
+      complete: async () => {
+        await new Promise((r) => setTimeout(r, 30));
+        return {
+          text: '{"one_liner": 42}',
+          model: 'slow-model',
+          provider: 'slow',
+          usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 },
+          costUsd: 0,
+          cacheHit: false,
+        };
+      },
+    };
+
+    let calls = 0;
+    setProvider({
+      ...slow,
+      complete: async (req) => {
+        calls++;
+        return slow.complete(req);
+      },
+    });
+
+    // With the clock past the point where a repair turn fits, the queue is
+    // handed the failure rather than a second call inside a dying function.
+    vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValue(60_000);
+
+    await expect(generateObject({ ...options, noCache: true })).rejects.toThrow(
+      /unusable output/,
+    );
+    expect(calls).toBe(1);
+    vi.restoreAllMocks();
+  });
+
+  it('still repairs in place when there is time', async () => {
+    const provider = new ScriptedProvider(['{"one_liner": 42}', analysisReply()]);
+    setProvider(provider);
+
+    const { data } = await generateObject({ ...options, noCache: true });
+
+    expect(data.one_liner).toBeTruthy();
+    expect(provider.requests).toHaveLength(2);
   });
 });

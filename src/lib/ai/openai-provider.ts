@@ -27,8 +27,8 @@ export class OpenAiProvider implements AiProvider {
       // on one step for half an hour.
       this.client = new OpenAI({
         apiKey: env.ai.openaiKey,
-        maxRetries: 2,
-        timeout: 120_000,
+        maxRetries: 1,
+        timeout: 40_000,
       });
     }
     return this.client;
@@ -43,7 +43,7 @@ export class OpenAiProvider implements AiProvider {
     try {
       const res = await this.sdk().chat.completions.create({
         model,
-        max_completion_tokens: req.maxTokens ?? 8000,
+        max_completion_tokens: req.maxTokens ?? 4000,
         ...(req.jsonSchema ? { response_format: { type: 'json_object' as const } } : {}),
         messages: [
           {

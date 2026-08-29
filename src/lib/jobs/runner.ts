@@ -372,12 +372,20 @@ export async function drainQueue(
   const budgetMs = opts.budgetMs ?? 50_000;
   const deadline = Date.now() + budgetMs;
 
+  /*
+   * A job claimed with seconds left is a job that will be killed holding its
+   * claim. The loop only checked that the deadline had not passed, so one
+   * starting at forty-four seconds of a forty-five second budget was
+   * guaranteed to die that way. Nothing is claimed without room to run it.
+   */
+  const ROOM_TO_RUN_MS = 45_000;
+
   let processed = 0;
   let succeeded = 0;
   let failed = 0;
   let dead = 0;
 
-  while (processed < max && Date.now() < deadline) {
+  while (processed < max && Date.now() + ROOM_TO_RUN_MS < deadline) {
     const job = await db().claimNextJob(nowIso(), LOCK_TIMEOUT_MS, opts.projectId ?? null);
     if (!job) break;
     const { status } = await runJob(job);
