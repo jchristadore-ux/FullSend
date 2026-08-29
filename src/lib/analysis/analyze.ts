@@ -31,7 +31,9 @@ Rules that matter more than eloquence:
 - Fill "not_capabilities" with things the product plausibly gets confused with
   but does NOT do, plus any claim category that cannot be substantiated
   (performance numbers, user counts, revenue, integrations not in the manifest).
-- "confidence" should be honest. A thin README and no routes means low confidence.
+- "confidence" is a number between 0 and 1, and should be honest: a thin README
+  and no routes means something around 0.3, not 0.9. Never a word, never a
+  percentage — 0.35, not "low" and not "35%".
 - Write "one_liner" the way the founder would say it out loud, not as marketing copy.
 
 Return JSON only.`;
