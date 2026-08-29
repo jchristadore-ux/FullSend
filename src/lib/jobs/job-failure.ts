@@ -22,6 +22,8 @@ export interface JobProgress {
   error?: string | null;
   /** When a worker claimed it. A claim older than the lock timeout is dead. */
   lockedAt?: string | null;
+  /** When it was last touched. A queue nobody drains leaves this untouched. */
+  updatedAt?: string | null;
 }
 
 /**
@@ -42,10 +44,26 @@ export const STALE_LOCK_MS = 3 * 60 * 1000;
  * Nothing was running. Nothing could be started. It stayed that way.
  */
 export function isStalled(job: JobProgress | null | undefined, now = Date.now()): boolean {
-  if (!job || job.status !== 'running') return false;
-  if (!job.lockedAt) return false;
-  const claimed = Date.parse(job.lockedAt);
-  return Number.isFinite(claimed) && now - claimed > STALE_LOCK_MS;
+  if (!job) return false;
+
+  if (job.status === 'running') {
+    if (!job.lockedAt) return false;
+    const claimed = Date.parse(job.lockedAt);
+    return Number.isFinite(claimed) && now - claimed > STALE_LOCK_MS;
+  }
+
+  /*
+   * A queued job is stuck too, and this is the case that had no way out at
+   * all: nothing claimed it, so there was no lock to expire, and the stage sat
+   * on "Working" with no button under it for as long as anyone watched. If the
+   * queue has not reached a job in twice the lock timeout, it is not going to
+   * on its own.
+   */
+  if (job.status === 'queued' && job.updatedAt) {
+    const touched = Date.parse(job.updatedAt);
+    return Number.isFinite(touched) && now - touched > STALE_LOCK_MS * 2;
+  }
+  return false;
 }
 
 export function hasFailed(job: JobProgress | null | undefined): boolean {

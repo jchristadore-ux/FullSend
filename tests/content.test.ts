@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createProject, fakeGitHubClient, setupContext, teardown, type TestContext } from './helpers';
 import { analyzeRepository } from '@/lib/analysis/analyze';
-import { approveStrategy, buildStrategy, normaliseMix } from '@/lib/strategy/build';
+import {
+  approveStrategy,
+  buildStrategy,
+  ensureBrandProfile,
+  normaliseMix,
+} from '@/lib/strategy/build';
 import { generateContent } from '@/lib/content/generate';
 import { allocate, planSlots, shiftMix, formatFor } from '@/lib/content/mix';
 import { checkDuplicate, contentFingerprint, similarity } from '@/lib/content/dedup';
@@ -314,6 +319,13 @@ describe('content generation', () => {
       client: fakeGitHubClient(),
     });
     const built = await buildStrategy(ctx.scope, project, analyzed.analysis);
+    const { brand } = await ensureBrandProfile(
+      ctx.scope,
+      project,
+      analyzed.analysis,
+      built.strategy,
+    );
+    built.brand = brand;
     const strategy = await approveStrategy(ctx.scope, built.strategy.id);
     return { analyzed, built, strategy };
   }
@@ -330,7 +342,7 @@ describe('content generation', () => {
     const result = await generateContent(ctx.scope, {
       project,
       analysis: analyzed.analysis,
-      brand: built.brand,
+      brand: built.brand!,
       strategy,
       personas: [],
       pillars: built.pillars,
@@ -364,7 +376,7 @@ describe('content generation', () => {
     const result = await generateContent(ctx.scope, {
       project,
       analysis: analyzed.analysis,
-      brand: built.brand,
+      brand: built.brand!,
       strategy,
       personas: [],
       pillars: built.pillars,
@@ -388,7 +400,7 @@ describe('content generation', () => {
     const common = {
       project,
       analysis: analyzed.analysis,
-      brand: built.brand,
+      brand: built.brand!,
       strategy,
       personas: [],
       pillars: built.pillars,

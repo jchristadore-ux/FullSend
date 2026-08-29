@@ -24,7 +24,7 @@ import { newId, nowIso } from '../src/lib/ids';
 import { useMockAdapters } from '../src/lib/social/registry';
 import { completeConnection } from '../src/lib/social/connections';
 import { analyzeRepository } from '../src/lib/analysis/analyze';
-import { approveStrategy, buildStrategy } from '../src/lib/strategy/build';
+import { approveStrategy, buildStrategy, ensureBrandProfile } from '../src/lib/strategy/build';
 import { generateContent } from '../src/lib/content/generate';
 import { openSlots, queueDepth, scheduleContent } from '../src/lib/scheduler/schedule';
 import { publishScheduledPost } from '../src/lib/publish/publish';
@@ -238,15 +238,16 @@ ${X}`);
   /* 3. Strategy. */
   stage('Marketing strategy');
   const built = await buildStrategy(scope, project, analysis);
+  built.brand = (await ensureBrandProfile(scope, project, analysis, built.strategy)).brand;
   const mixTotal = Object.values(built.strategy.content_mix).reduce((a, b) => a + b, 0);
   ok('Positioning', built.strategy.positioning.slice(0, 90) + '…');
   check(mixTotal === 100, 'Content mix totals 100', JSON.stringify(built.strategy.content_mix));
   check(built.pillars.length > 0, 'Content pillars', built.pillars.map((p) => p.name).join(' · '));
   check(built.campaigns.length > 0, 'Campaigns', built.campaigns.map((c) => c.name).join(' · '));
   check(
-    built.brand.words_to_avoid.length > 0,
+    built.brand!.words_to_avoid.length > 0,
     'Brand profile',
-    `${built.brand.words_to_avoid.length} banned phrases`,
+    `${built.brand!.words_to_avoid.length} banned phrases`,
   );
 
   const strategy = await approveStrategy(scope, built.strategy.id);
@@ -300,7 +301,7 @@ ${X}`);
   const generated = await generateContent(scope, {
     project,
     analysis,
-    brand: built.brand,
+    brand: built.brand!,
     strategy,
     personas: [],
     pillars: built.pillars,

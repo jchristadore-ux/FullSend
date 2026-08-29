@@ -61,7 +61,8 @@ export interface StrategyResult {
   strategy: MarketingStrategy;
   pillars: ContentPillar[];
   campaigns: Campaign[];
-  brand: BrandProfile;
+  /** Null from `buildStrategy`: the brand profile is its own job. */
+  brand: BrandProfile | null;
   costUsd: number;
 }
 
@@ -94,13 +95,13 @@ export async function buildStrategy(
       getStrategy(scope, project.id),
       getBrandProfile(scope, project.id),
     ]);
-    if (existing && existingBrand) {
+    if (existing) {
       const [pillars, campaigns] = await Promise.all([
         db().find(scope, 'content_pillars', { where: { project_id: project.id } }),
         db().find(scope, 'campaigns', { where: { project_id: project.id } }),
       ]);
       log.info('reusing the saved marketing plan', { project: project.id, version: existing.version });
-      return { strategy: existing, pillars, campaigns, brand: existingBrand, costUsd: 0 };
+      return { strategy: existing, pillars, campaigns, brand: existingBrand ?? null, costUsd: 0 };
     }
   }
 
@@ -163,13 +164,14 @@ export async function buildStrategy(
 
   const pillars = await replacePillars(scope, project, data.pillars, mix);
   const campaigns = await replaceCampaigns(scope, project, data.campaigns, personas);
-  const { brand, costUsd: brandCost } = await buildBrandProfile(
-    scope,
-    project,
-    analysis,
-    strategy,
-  );
 
+  /*
+   * The brand profile is a second model call, and it used to run here. Two
+   * premium-tier calls plus the pillar and campaign writes do not fit in a
+   * sixty-second invocation: the plan stage sat on "Working" for as long as
+   * anyone watched, because the invocation was killed before it could save
+   * anything and nothing was left to report. It is its own job now.
+   */
   log.info('strategy built', {
     project: project.id,
     version,
@@ -177,7 +179,7 @@ export async function buildStrategy(
     campaigns: campaigns.length,
   });
 
-  return { strategy, pillars, campaigns, brand, costUsd: strategyCost + brandCost };
+  return { strategy, pillars, campaigns, brand: null, costUsd: strategyCost };
 }
 
 /** Mixes must total exactly 100 — the calendar allocator depends on it. */
@@ -279,6 +281,23 @@ async function replaceCampaigns(
       };
     }),
   );
+}
+
+/**
+ * The brand profile, built once and reused. Second half of the plan stage.
+ */
+export async function ensureBrandProfile(
+  scope: TenantScope,
+  project: Project,
+  analysis: ProductAnalysis,
+  strategy: MarketingStrategy,
+  opts: { refresh?: boolean } = {},
+): Promise<{ brand: BrandProfile; costUsd: number }> {
+  if (!opts.refresh) {
+    const existing = await getBrandProfile(scope, project.id);
+    if (existing) return { brand: existing, costUsd: 0 };
+  }
+  return buildBrandProfile(scope, project, analysis, strategy);
 }
 
 export async function buildBrandProfile(
