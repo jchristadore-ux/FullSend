@@ -47,7 +47,8 @@ Rules:
 - Never recommend a change from fewer than 3 samples per side. If the data is
   thin, say so plainly and recommend volume instead.
 - Every recommendation must carry the numbers it is based on.
-- Confidence must reflect sample size honestly.
+- "confidence" is a number between 0 and 1 — 0.4, never "medium" and never
+  "40%" — and must reflect sample size honestly.
 - Prefer one or two decisive changes over five timid ones.
 
 Return JSON only.`;

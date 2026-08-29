@@ -14,6 +14,8 @@ import { db, recordAiUsage } from '../db/repo';
 import { systemScope, type TenantScope } from '../db';
 import type { Uuid } from '../types';
 import { cacheKey, isCacheable, readCache, writeCache } from './cache';
+import { coerceToSchema } from './coerce';
+import { jsonSchemaFor } from './json-schema';
 import { DeterministicProvider } from './deterministic-provider';
 /*
  * Imported statically, not require()d on demand.
@@ -31,7 +33,13 @@ import { DeterministicProvider } from './deterministic-provider';
  */
 import { AnthropicProvider } from './anthropic-provider';
 import { OpenAiProvider } from './openai-provider';
-import type { AiProvider, CompletionRequest, CompletionResponse, ModelTier } from './types';
+import type {
+  AiMessage,
+  AiProvider,
+  CompletionRequest,
+  CompletionResponse,
+  ModelTier,
+} from './types';
 
 const log = logger('ai');
 
@@ -119,6 +127,11 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
 
   await assertWithinBudget(opts.attribution?.projectId ?? null);
 
+  // Derived from the validator itself, so the model is told the exact shape it
+  // will be held to instead of inferring it from the prose of the system
+  // prompt. Also what the repair pass reads to fix notation mistakes.
+  const jsonSchema = opts.jsonSchema ?? jsonSchemaFor(opts.schema) ?? undefined;
+
   const req: CompletionRequest = {
     task: opts.task,
     tier,
@@ -130,7 +143,7 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
       },
     ],
     maxTokens: opts.maxTokens,
-    jsonSchema: opts.jsonSchema,
+    jsonSchema,
     noCache: opts.noCache,
   };
 
@@ -138,7 +151,7 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
   if (isCacheable(req)) {
     const hit = readCache(key);
     if (hit) {
-      const parsed = tryParse(hit.text, opts.schema);
+      const parsed = tryParse(hit.text, opts.schema, jsonSchema);
       if (parsed.ok) {
         await ledger(opts, hit, tier);
         return { data: parsed.value, costUsd: 0, model: hit.model, cacheHit: true };
@@ -147,7 +160,7 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
   }
 
   let response = await provider.complete(req);
-  let parsed = tryParse(response.text, opts.schema);
+  let parsed = tryParse(response.text, opts.schema, jsonSchema);
   let totalCost = response.costUsd;
 
   if (!parsed.ok) {
@@ -158,20 +171,11 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
     const retry: CompletionRequest = {
       ...req,
       noCache: true,
-      messages: [
-        ...req.messages,
-        { role: 'assistant', content: response.text.slice(0, 4000) },
-        {
-          role: 'user',
-          content:
-            `That response did not validate: ${parsed.error}\n` +
-            'Return only the corrected JSON object. No prose, no code fences.',
-        },
-      ],
+      messages: correctionMessages(req.messages, response.text, parsed.error),
     };
     response = await provider.complete(retry);
     totalCost += response.costUsd;
-    parsed = tryParse(response.text, opts.schema);
+    parsed = tryParse(response.text, opts.schema, jsonSchema);
     if (!parsed.ok) {
       throw new FullSendError('ai_invalid_output', `AI returned unusable output: ${parsed.error}`, {
         retryable: true,
@@ -187,9 +191,44 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
   return { data: parsed.value, costUsd: totalCost, model: response.model, cacheHit: false };
 }
 
+/**
+ * The correction turn.
+ *
+ * The failed attempt is echoed back so the model can repair it rather than
+ * start over, but only when there is something to echo: an empty or
+ * whitespace-only assistant turn is rejected by the provider outright, which
+ * would turn a recoverable validation failure into a hard API error. With
+ * nothing to echo, the correction rides along on the original request instead,
+ * keeping the user/assistant turns alternating.
+ */
+function correctionMessages(messages: AiMessage[], text: string, error: string): AiMessage[] {
+  const instruction =
+    `That response did not validate: ${error}\n` +
+    'Return only the corrected JSON object. No prose, no code fences.';
+  const echo = text.slice(0, 4000).trim();
+  if (echo) {
+    return [
+      ...messages,
+      { role: 'assistant', content: echo },
+      { role: 'user', content: instruction },
+    ];
+  }
+
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== 'user') return [...messages, { role: 'user', content: instruction }];
+  return [
+    ...messages.slice(0, -1),
+    {
+      role: 'user',
+      content: `${last.content}\n\nYour previous attempt returned nothing. ${instruction}`,
+    },
+  ];
+}
+
 function tryParse<T>(
   text: string,
   schema: z.ZodType<T>,
+  jsonSchema?: Record<string, unknown>,
 ): { ok: true; value: T } | { ok: false; error: string } {
   const json = extractJson(text);
   if (json === null) return { ok: false, error: 'no JSON object found in the response' };
@@ -199,7 +238,9 @@ function tryParse<T>(
   } catch (e) {
     return { ok: false, error: `invalid JSON (${(e as Error).message})` };
   }
-  const result = schema.safeParse(raw);
+  // Notation mistakes are repaired first; the schema below is no less strict
+  // for it, and nothing ambiguous is touched.
+  const result = schema.safeParse(coerceToSchema(raw, jsonSchema));
   if (!result.success) {
     const issues = result.error.issues
       .slice(0, 8)
