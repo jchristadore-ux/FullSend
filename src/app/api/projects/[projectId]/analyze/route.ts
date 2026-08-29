@@ -29,6 +29,7 @@ export const GET = projectRoute(async ({ session, project }) => {
     limit: 5,
   });
   const analyzeJob = jobs.find((j) => j.type === 'analyze_repository');
+  const audienceJob = jobs.find((j) => j.type === 'identify_audience');
   const strategyJob = jobs.find((j) => j.type === 'generate_strategy');
 
   return {
@@ -43,6 +44,13 @@ export const GET = projectRoute(async ({ session, project }) => {
       // without it the progress screen cannot tell a slow job from a broken one.
       analyze: analyzeJob
         ? { status: analyzeJob.status, attempts: analyzeJob.attempts, error: analyzeJob.last_error }
+        : null,
+      audience: audienceJob
+        ? {
+            status: audienceJob.status,
+            attempts: audienceJob.attempts,
+            error: audienceJob.last_error,
+          }
         : null,
       strategy: strategyJob
         ? { status: strategyJob.status, attempts: strategyJob.attempts, error: strategyJob.last_error }

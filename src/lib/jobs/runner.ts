@@ -15,7 +15,7 @@ import { db, enqueue, getAnalysis, recordError } from '../db/repo';
 import { isFullSendError } from '../errors';
 import { nowIso } from '../ids';
 import { logger } from '../logger';
-import { systemAnalyze } from '../analysis/analyze';
+import { identifyAudience, systemAnalyzeProduct } from '../analysis/analyze';
 import { buildStrategy } from '../strategy/build';
 import { collectAnalytics } from '../analytics/collect';
 import { optimize } from '../optimizer/optimize';
@@ -29,8 +29,18 @@ import type { Job, JobType } from '../types';
 
 const log = logger('jobs');
 
-/** A running job older than this is assumed to have died with its worker. */
-const LOCK_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * A running job older than this is assumed to have died with its worker.
+ *
+ * Ten minutes was the old value, and it was the length of the stall: the
+ * workers here are serverless invocations that are killed at sixty seconds, so
+ * a job that outgrew its invocation left a `running` row that nothing would
+ * reclaim for ten minutes — no error, no progress, nothing for the founder to
+ * do but watch. Three minutes is comfortably longer than any invocation can
+ * live and short enough that a death is recovered from while someone is still
+ * looking at the screen.
+ */
+const LOCK_TIMEOUT_MS = 3 * 60 * 1000;
 
 type Handler = (job: Job) => Promise<Record<string, unknown>>;
 
@@ -42,26 +52,26 @@ const handlers: Record<JobType, Handler> = {
     if (!project) throw new Error(`Project ${projectId} not found`);
 
     await db().update(scope, 'projects', projectId, { status: 'analyzing' });
+    const refresh = Boolean(job.payload.refresh);
     try {
-      const result = await systemAnalyze(
+      const result = await systemAnalyzeProduct(
         project,
         String(job.payload.repository),
         job.payload.githubToken ? String(job.payload.githubToken) : undefined,
-        { refresh: Boolean(job.payload.refresh) },
+        { refresh },
       );
       await db().update(scope, 'projects', projectId, {
         status: 'analyzed',
         updated_at: nowIso(),
       });
-      // Analysis flows straight into strategy — the founder waits for one thing.
-      await enqueue(scope, 'generate_strategy', { projectId }, { projectId });
+      // The audience is its own job. Both used to run here, and two sequential
+      // model calls plus a GitHub crawl do not fit in one invocation.
+      await enqueue(scope, 'identify_audience', { projectId, refresh }, { projectId });
       return {
         analysisId: result.analysis.id,
-        personas: result.personas.length,
         features: result.analysis.features.length,
         costUsd: result.costUsd,
-        reused: { analysis: !result.ran.analysis, personas: !result.ran.personas },
-        personaError: result.personaError,
+        reused: !result.ran.analysis,
       };
     } catch (e) {
       /*
@@ -74,6 +84,30 @@ const handlers: Record<JobType, Handler> = {
       await db().update(scope, 'projects', projectId, { status: kept ? 'analyzed' : 'failed' });
       throw e;
     }
+  },
+
+  identify_audience: async (job) => {
+    const scope = systemScope('job:identify_audience');
+    const projectId = String(job.payload.projectId);
+    const project = await db().get(scope, 'projects', projectId);
+    if (!project) throw new Error(`Project ${projectId} not found`);
+
+    const analysis = await getAnalysis(scope, projectId);
+    if (!analysis) throw new Error('No product analysis to identify an audience from');
+
+    const result = await identifyAudience(scope, project, analysis, {
+      refresh: Boolean(job.payload.refresh),
+    });
+
+    /*
+     * Strategy is enqueued either way. A missing audience is a worse plan, not
+     * no plan, and the whole point of splitting these apart is that one step
+     * stalling can no longer hold the machine still. The failure is already
+     * recorded against the project, and re-running the analysis retries this
+     * step alone because no personas were written.
+     */
+    await enqueue(scope, 'generate_strategy', { projectId }, { projectId });
+    return { personas: result.personas.length, costUsd: result.costUsd, error: result.error };
   },
 
   generate_strategy: async (job) => {
