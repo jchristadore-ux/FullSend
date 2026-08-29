@@ -23,7 +23,13 @@ export class OpenAiProvider implements AiProvider {
           remedy: 'Add OPENAI_API_KEY, or set FULLSEND_AI_PROVIDER=anthropic.',
         });
       }
-      this.client = new OpenAI({ apiKey: env.ai.openaiKey, maxRetries: 3 });
+      // Same reasoning as the Anthropic adapter: fail visibly rather than sit
+      // on one step for half an hour.
+      this.client = new OpenAI({
+        apiKey: env.ai.openaiKey,
+        maxRetries: 2,
+        timeout: 120_000,
+      });
     }
     return this.client;
   }

@@ -11,7 +11,7 @@
 import 'server-only';
 import { env } from '../env';
 import { systemScope } from '../db';
-import { db, enqueue, recordError } from '../db/repo';
+import { db, enqueue, getAnalysis, recordError } from '../db/repo';
 import { isFullSendError } from '../errors';
 import { nowIso } from '../ids';
 import { logger } from '../logger';
@@ -47,6 +47,7 @@ const handlers: Record<JobType, Handler> = {
         project,
         String(job.payload.repository),
         job.payload.githubToken ? String(job.payload.githubToken) : undefined,
+        { refresh: Boolean(job.payload.refresh) },
       );
       await db().update(scope, 'projects', projectId, {
         status: 'analyzed',
@@ -59,9 +60,18 @@ const handlers: Record<JobType, Handler> = {
         personas: result.personas.length,
         features: result.analysis.features.length,
         costUsd: result.costUsd,
+        reused: { analysis: !result.ran.analysis, personas: !result.ran.personas },
+        personaError: result.personaError,
       };
     } catch (e) {
-      await db().update(scope, 'projects', projectId, { status: 'failed' });
+      /*
+       * A retry resumes from here, so the status must say what actually
+       * survived. Marking the project `failed` outright discarded a completed
+       * product analysis in the founder's eyes and sent the next run back to
+       * the beginning; `analyzed` is the truth when the analysis is on disk.
+       */
+      const kept = await getAnalysis(scope, projectId).catch(() => null);
+      await db().update(scope, 'projects', projectId, { status: kept ? 'analyzed' : 'failed' });
       throw e;
     }
   },

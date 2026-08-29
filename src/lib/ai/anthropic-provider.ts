@@ -13,6 +13,9 @@ import type { AiProvider, CompletionRequest, CompletionResponse, ModelTier } fro
  * against one unchanging brand + product context, so that prefix is written to
  * cache once and read back at a tenth of the price for every post after it.
  */
+/** Long enough for the biggest content batch, short enough to fail visibly. */
+const REQUEST_TIMEOUT_MS = 120_000;
+
 export class AnthropicProvider implements AiProvider {
   readonly name = 'anthropic';
   readonly live: boolean;
@@ -29,7 +32,18 @@ export class AnthropicProvider implements AiProvider {
           remedy: 'Add ANTHROPIC_API_KEY to your environment, or set FULLSEND_AI_PROVIDER=openai.',
         });
       }
-      this.client = new Anthropic({ apiKey: env.ai.anthropicKey, maxRetries: 3 });
+      /*
+       * The SDK default is a ten-minute request timeout with three retries,
+       * which is half an hour of a progress screen sitting on one step before
+       * anything is reported. No generation here legitimately takes two
+       * minutes, so a request that has is not coming back: fail it, and let
+       * the job queue retry it with backoff where the founder can see it.
+       */
+      this.client = new Anthropic({
+        apiKey: env.ai.anthropicKey,
+        maxRetries: 2,
+        timeout: REQUEST_TIMEOUT_MS,
+      });
     }
     return this.client;
   }

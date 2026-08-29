@@ -64,16 +64,26 @@ export const POST = projectRoute(
       return { error: 'no_repository', message: 'No repository is attached to this project' };
     }
 
+    /*
+     * Pressing the button again resumes: whatever already succeeded is kept
+     * and only the steps that did not run again. A fresh start is asked for
+     * explicitly — by naming a repository (it has moved on) or by `refresh`.
+     */
+    const refresh = Boolean(body.refresh || body.repository);
+
     const job = await enqueue(
       session.scope,
       'analyze_repository',
-      { projectId: project.id, repository: `${repository.owner}/${repository.name}` },
+      { projectId: project.id, repository: `${repository.owner}/${repository.name}`, refresh },
       { projectId: project.id },
     );
-    return { jobId: job.id, status: 'queued' };
+    return { jobId: job.id, status: 'queued', refresh };
   },
   {
-    schema: z.object({ repository: z.string().min(3).max(300).optional() }),
+    schema: z.object({
+      repository: z.string().min(3).max(300).optional(),
+      refresh: z.boolean().optional(),
+    }),
     rateLimit: LIMITS.analyze,
     rateLimitKey: 'analyze',
   },
