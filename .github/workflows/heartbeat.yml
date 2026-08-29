@@ -72,17 +72,32 @@ jobs:
             exit 1
           fi
 
-          failed=0
-          for job in $JOBS; do
-            echo "── $job"
+          call() {
+            echo "── $1"
             # --fail-with-body so a non-2xx surfaces the API's own explanation.
-            if ! curl --silent --show-error --fail-with-body \
+            curl --silent --show-error --fail-with-body \
                  --max-time 300 --retry 2 --retry-delay 10 \
                  -H "Authorization: Bearer $SECRET" \
-                 "$URL/api/cron/$job"; then
-              echo "::error::$job failed"
-              failed=1
-            fi
+                 "$URL/api/cron/$1"
             echo
+          }
+
+          failed=0
+          for job in $JOBS; do
+            call "$job" || { echo "::error::$job failed"; failed=1; }
           done
+
+          # GitHub does not honour '*/5' on a repository this quiet. The run
+          # history says these fire roughly hourly, which is the difference
+          # between a machine that keeps working after the browser closes and
+          # one that moves a single job an hour. The schedule is not ours to
+          # fix, so each run covers the gap itself: keep draining for five
+          # minutes rather than draining once and exiting.
+          if echo "$JOBS" | grep -q queue; then
+            for _ in 1 2 3 4 5 6 7 8 9; do
+              sleep 30
+              call queue || { echo "::error::queue sweep failed"; failed=1; }
+            done
+          fi
+
           exit $failed
