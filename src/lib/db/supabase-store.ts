@@ -302,18 +302,22 @@ export class SupabaseStore implements Store {
    * Atomic claim. The conditional `.eq('status', candidate.status)` makes the
    * update lose harmlessly if another worker got there first, and we retry.
    */
-  async claimNextJob(now: string, lockTimeoutMs: number): Promise<Job | null> {
+  async claimNextJob(
+    now: string,
+    lockTimeoutMs: number,
+    projectId?: Uuid | null,
+  ): Promise<Job | null> {
     const staleBefore = new Date(Date.parse(now) - lockTimeoutMs).toISOString();
     for (let attempt = 0; attempt < 5; attempt++) {
-      const { data, error } = await this.client
+      let query = this.client
         .from('jobs')
         .select('*')
         .or(
           `and(status.eq.queued,run_after.lte.${now}),` +
             `and(status.eq.running,locked_at.lt.${staleBefore})`,
-        )
-        .order('run_after', { ascending: true })
-        .limit(1);
+        );
+      if (projectId) query = query.eq('project_id', projectId);
+      const { data, error } = await query.order('run_after', { ascending: true }).limit(1);
       if (error) throw this.wrap(error, 'jobs');
       const candidate = (data ?? [])[0] as Job | undefined;
       if (!candidate) return null;

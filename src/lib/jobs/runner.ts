@@ -343,7 +343,7 @@ export async function runJob(job: Job): Promise<{ status: 'succeeded' | 'failed'
 
 /** Drains the queue. `budgetMs` keeps a serverless invocation inside its limit. */
 export async function drainQueue(
-  opts: { max?: number; budgetMs?: number } = {},
+  opts: { max?: number; budgetMs?: number; projectId?: string | null } = {},
 ): Promise<{ processed: number; succeeded: number; failed: number; dead: number }> {
   const max = opts.max ?? 20;
   const budgetMs = opts.budgetMs ?? 50_000;
@@ -355,7 +355,7 @@ export async function drainQueue(
   let dead = 0;
 
   while (processed < max && Date.now() < deadline) {
-    const job = await db().claimNextJob(nowIso(), LOCK_TIMEOUT_MS);
+    const job = await db().claimNextJob(nowIso(), LOCK_TIMEOUT_MS, opts.projectId ?? null);
     if (!job) break;
     const { status } = await runJob(job);
     processed++;
