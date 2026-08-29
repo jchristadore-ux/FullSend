@@ -211,7 +211,11 @@ export class MemoryStore implements Store {
     return rows.length;
   }
 
-  async claimNextJob(now: string, lockTimeoutMs: number): Promise<Job | null> {
+  async claimNextJob(
+    now: string,
+    lockTimeoutMs: number,
+    projectId?: Uuid | null,
+  ): Promise<Job | null> {
     // Serialise claims so two concurrent workers cannot take the same job.
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
@@ -224,8 +228,9 @@ export class MemoryStore implements Store {
       const candidate = jobs
         .filter(
           (j) =>
-            (j.status === 'queued' && j.run_after <= now) ||
-            (j.status === 'running' && j.locked_at !== null && j.locked_at < staleBefore),
+            (!projectId || j.project_id === projectId) &&
+            ((j.status === 'queued' && j.run_after <= now) ||
+              (j.status === 'running' && j.locked_at !== null && j.locked_at < staleBefore)),
         )
         .sort((a, b) => (a.run_after < b.run_after ? -1 : a.run_after > b.run_after ? 1 : 0))[0];
       if (!candidate) return null;

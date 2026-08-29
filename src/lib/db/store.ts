@@ -179,7 +179,7 @@ export interface Store {
    * Claims the next runnable job atomically. Two workers must never get the
    * same job — the Supabase driver does this with a conditional update.
    */
-  claimNextJob(now: string, lockTimeoutMs: number): Promise<Job | null>;
+  claimNextJob(now: string, lockTimeoutMs: number, projectId?: Uuid | null): Promise<Job | null>;
 
   reset?(): Promise<void>;
 }

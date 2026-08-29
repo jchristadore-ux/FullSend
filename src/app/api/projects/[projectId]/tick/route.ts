@@ -12,7 +12,13 @@ export const maxDuration = 60;
  * scheduler at all. It only ever drains jobs that are already queued — it
  * cannot create work, and the caller must own the project.
  */
-export const POST = projectRoute(async () => {
-  const result = await drainQueue({ max: 4, budgetMs: 45_000 });
-  return result;
+export const POST = projectRoute(async ({ project }) => {
+  /*
+   * Scoped to this project. The queue is global, so a founder watching their
+   * own analysis was spending every tick running other projects' jobs — and
+   * with a backlog of dead ones from earlier attempts, the job they were
+   * actually waiting on was never reached. The page nudges its own work;
+   * cron still drains everything.
+   */
+  return drainQueue({ max: 4, budgetMs: 45_000, projectId: project.id });
 });

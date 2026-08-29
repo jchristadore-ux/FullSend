@@ -333,3 +333,79 @@ describe('a job whose worker died', () => {
     expect(state.stages.find((s) => s.name === 'analysis')!.status).toBe('complete');
   });
 });
+
+/**
+ * Pressing Analyze twice.
+ *
+ * The button that starts the pipeline used to insert a new project on every
+ * press. A new project has no repository, no analysis, no plan and no content:
+ * an empty pipeline that has to run from the beginning, while everything the
+ * previous press achieved sits on a project nobody is looking at any more.
+ * Ten presses, ten projects, ten analyses of the same repository — and every
+ * checkpoint in this file rendered meaningless, because the run being resumed
+ * was never the run that had done the work.
+ */
+describe('starting the same repository twice', () => {
+  let ctx: TestContext;
+
+  beforeEach(async () => {
+    ctx = await setupContext();
+  });
+
+  afterEach(() => teardown());
+
+  /** What POST /api/projects does, exercised through its own helpers. */
+  async function start(repository: string) {
+    const { findProjectForRepo } = await import('@/lib/pipeline/resume');
+    const existing = await findProjectForRepo(ctx.scope, ctx.user.id, repository);
+    if (existing) return { project: existing, resumed: true };
+
+    const project = await createProject(ctx.scope, ctx.user.id, {
+      autopilot_mode: 'full_send',
+    });
+    await enqueueOnce(
+      ctx.scope,
+      'analyze_repository',
+      { projectId: project.id, repository },
+      { projectId: project.id },
+    );
+    return { project, resumed: false };
+  }
+
+  it('resumes the project already working on it', async () => {
+    const first = await start('acme/taskflow');
+    expect(first.resumed).toBe(false);
+
+    const second = await start('acme/taskflow');
+    expect(second.resumed).toBe(true);
+    expect(second.project.id).toBe(first.project.id);
+
+    const projects = await db().find(ctx.scope, 'projects', { where: { user_id: ctx.user.id } });
+    expect(projects).toHaveLength(1);
+  });
+
+  it('matches once the repository row exists, not just the job', async () => {
+    const first = await start('acme/taskflow');
+    await analyzeProduct(ctx.scope, first.project, 'acme/taskflow', {
+      client: fakeGitHubClient(),
+    });
+
+    const second = await start('acme/taskflow');
+    expect(second.project.id).toBe(first.project.id);
+    expect(second.resumed).toBe(true);
+  });
+
+  it('is not confused by a different repository', async () => {
+    const first = await start('acme/taskflow');
+    const other = await start('acme/something-else');
+
+    expect(other.project.id).not.toBe(first.project.id);
+    expect(other.resumed).toBe(false);
+  });
+
+  it('ignores case, so the same repo typed differently is the same project', async () => {
+    const first = await start('acme/taskflow');
+    const second = await start('ACME/TaskFlow');
+    expect(second.project.id).toBe(first.project.id);
+  });
+});
