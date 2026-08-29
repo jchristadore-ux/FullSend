@@ -59,18 +59,116 @@ export interface AnalyzeResult {
   personaError: string | null;
 }
 
+export interface ProductResult {
+  repository: Repository;
+  analysis: ProductAnalysis;
+  costUsd: number;
+  ran: { ingest: boolean; analysis: boolean };
+}
+
+export interface AudienceResult {
+  personas: Persona[];
+  costUsd: number;
+  ran: boolean;
+  error: string | null;
+}
+
 /**
- * Understands the product, resuming rather than restarting.
+ * Step one: read the repository and work out what the product is.
  *
- * This runs as three checkpointed stages — read the repository, understand the
- * product, identify the audience — and each one is skipped when its result is
- * already in the database. A run that died on the audience step used to redo
- * the GitHub ingest and the whole product analysis on every retry, paying for
- * both again and giving the founder a progress bar that started from zero. Now
- * it picks up at the step that failed.
+ * This is deliberately half of what it used to be. Ingest, product analysis
+ * and audience ran as one unit inside a single serverless invocation with a
+ * sixty-second ceiling — two sequential model calls and a GitHub crawl, which
+ * on a real repository does not fit. The invocation was killed part-way, the
+ * job row was left `running` with a lock nobody would break for ten minutes,
+ * and the progress screen sat on one step with nothing failing and nothing
+ * finishing. Splitting the work is what stops that: each job now does one
+ * model call and returns well inside the limit.
  *
- * `refresh` is the deliberate re-analysis: the repository has moved on and the
- * old understanding should be replaced rather than reused.
+ * It is also checkpointed. A repeat run reuses a saved analysis and never
+ * reads GitHub again — the ingest exists to feed the analysis, so there is
+ * nothing to ingest for once that analysis is saved. `refresh` is the
+ * deliberate re-analysis: the repository has moved on and the old
+ * understanding should be replaced rather than reused.
+ */
+export async function analyzeProduct(
+  scope: TenantScope,
+  project: Project,
+  repositoryInput: string,
+  opts: { githubToken?: string; client?: GitHubClient; refresh?: boolean } = {},
+): Promise<ProductResult> {
+  const repository = opts.refresh ? null : await getRepository(scope, project.id);
+  const analysis = opts.refresh ? null : await getAnalysis(scope, project.id);
+
+  if (repository && analysis && analysis.repository_id === repository.id) {
+    log.info('reusing the existing product analysis', { project: project.id });
+    return { repository, analysis, costUsd: 0, ran: { ingest: false, analysis: false } };
+  }
+
+  const ref = parseRepoInput(repositoryInput);
+  const client = opts.client ?? new GitHubClient(opts.githubToken);
+  log.info('analysing repository', { project: project.id, repo: `${ref.owner}/${ref.name}` });
+
+  const bundle = await ingestRepository(ref, client);
+  const saved = await upsertRepository(scope, project.id, bundle);
+  const result = await runAnalysis(scope, project, saved, bundle);
+
+  return {
+    repository: saved,
+    analysis: result.analysis,
+    costUsd: result.cost,
+    ran: { ingest: true, analysis: true },
+  };
+}
+
+/**
+ * Step two: work out who it is for.
+ *
+ * Never throws. The audience is enrichment on top of an understanding that is
+ * already saved, and losing it is not a reason to lose the understanding — or
+ * the marketing plan, the content and the schedule that follow from it. A
+ * failure is recorded where the founder can see it and the caller carries on;
+ * because no personas were written, the next run retries this step alone.
+ */
+export async function identifyAudience(
+  scope: TenantScope,
+  project: Project,
+  analysis: ProductAnalysis,
+  opts: { refresh?: boolean } = {},
+): Promise<AudienceResult> {
+  const existing = opts.refresh
+    ? []
+    : await db().find(scope, 'personas', { where: { project_id: project.id } });
+  if (existing.length) return { personas: existing, costUsd: 0, ran: false, error: null };
+
+  try {
+    const result = await runPersonas(scope, project, analysis);
+    return { personas: result.personas, costUsd: result.cost, ran: true, error: null };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    log.warn('audience step failed; keeping the product analysis', {
+      project: project.id,
+      error,
+    });
+    await recordError(scope, {
+      projectId: project.id,
+      scope: 'analysis.personas',
+      message: `Could not identify the audience: ${error}`,
+      remedy:
+        'The product analysis was kept and FullSend is carrying on without personas. ' +
+        'Run the analysis again to retry just this step.',
+      fatal: false,
+    });
+    return { personas: [], costUsd: 0, ran: false, error };
+  }
+}
+
+/**
+ * Both steps back to back.
+ *
+ * The queue runs them as two jobs so neither can outlive its invocation; this
+ * is for callers that are not the queue and can afford to wait — the e2e
+ * chain, and a direct call from a script.
  */
 export async function analyzeRepository(
   scope: TenantScope,
@@ -78,74 +176,17 @@ export async function analyzeRepository(
   repositoryInput: string,
   opts: { githubToken?: string; client?: GitHubClient; refresh?: boolean } = {},
 ): Promise<AnalyzeResult> {
-  const ran = { ingest: false, analysis: false, personas: false };
-  let costUsd = 0;
+  const product = await analyzeProduct(scope, project, repositoryInput, opts);
+  const audience = await identifyAudience(scope, project, product.analysis, opts);
 
-  const done = opts.refresh
-    ? { repository: null, analysis: null }
-    : {
-        repository: await getRepository(scope, project.id),
-        analysis: await getAnalysis(scope, project.id),
-      };
-
-  let repository = done.repository;
-  let analysis = done.analysis;
-
-  // Stages 1 and 2. Reading the repository is only worth doing when there is
-  // an understanding to build from it, so a resumed run skips the GitHub round
-  // trip entirely rather than ingesting a bundle it will not use.
-  if (!repository || !analysis || analysis.repository_id !== repository.id) {
-    const ref = parseRepoInput(repositoryInput);
-    const client = opts.client ?? new GitHubClient(opts.githubToken);
-    log.info('analysing repository', { project: project.id, repo: `${ref.owner}/${ref.name}` });
-
-    const bundle = await ingestRepository(ref, client);
-    repository = await upsertRepository(scope, project.id, bundle);
-    ran.ingest = true;
-
-    const result = await runAnalysis(scope, project, repository, bundle);
-    analysis = result.analysis;
-    costUsd += result.cost;
-    ran.analysis = true;
-  } else {
-    log.info('reusing the existing product analysis', { project: project.id });
-  }
-
-  // Stage 3. The audience is enrichment on top of an understanding that is
-  // already saved, so failing here must not discard the understanding — or the
-  // marketing plan, the content and the schedule that follow from it. The
-  // failure is recorded where the founder can see it, and the next run resumes
-  // at exactly this step because no personas were written.
-  let personas = opts.refresh
-    ? []
-    : await db().find(scope, 'personas', { where: { project_id: project.id } });
-  let personaError: string | null = null;
-
-  if (!personas.length) {
-    try {
-      const result = await runPersonas(scope, project, analysis);
-      personas = result.personas;
-      costUsd += result.cost;
-      ran.personas = true;
-    } catch (e) {
-      personaError = e instanceof Error ? e.message : String(e);
-      log.warn('audience step failed; keeping the product analysis', {
-        project: project.id,
-        error: personaError,
-      });
-      await recordError(scope, {
-        projectId: project.id,
-        scope: 'analysis.personas',
-        message: `Could not identify the audience: ${personaError}`,
-        remedy:
-          'The product analysis was kept and FullSend is carrying on without personas. ' +
-          'Run the analysis again to retry just this step.',
-        fatal: false,
-      });
-    }
-  }
-
-  return { repository, analysis, personas, costUsd, ran, personaError };
+  return {
+    repository: product.repository,
+    analysis: product.analysis,
+    personas: audience.personas,
+    costUsd: product.costUsd + audience.costUsd,
+    ran: { ...product.ran, personas: audience.ran },
+    personaError: audience.error,
+  };
 }
 
 async function upsertRepository(
@@ -343,6 +384,19 @@ export async function systemAnalyze(
   opts: { refresh?: boolean } = {},
 ): Promise<AnalyzeResult> {
   return analyzeRepository(systemScope('background analysis'), project, repositoryInput, {
+    githubToken,
+    refresh: opts.refresh,
+  });
+}
+
+/** Step one only. What the `analyze_repository` job runs. */
+export async function systemAnalyzeProduct(
+  project: Project,
+  repositoryInput: string,
+  githubToken?: string,
+  opts: { refresh?: boolean } = {},
+): Promise<ProductResult> {
+  return analyzeProduct(systemScope('background analysis'), project, repositoryInput, {
     githubToken,
     refresh: opts.refresh,
   });

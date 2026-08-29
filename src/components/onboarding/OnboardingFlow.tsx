@@ -35,9 +35,20 @@ interface AnalyzeState {
   screenshots: { withImages: number; describedOnly: number; note: string } | null;
   jobs: {
     analyze: JobProgress | null;
+    audience: JobProgress | null;
     strategy: JobProgress | null;
   };
 }
+
+/**
+ * How long the checklist may sit on one step before it is called stuck.
+ *
+ * Something that has not moved in three minutes is not slow, it is broken, and
+ * a spinner that never resolves is the worst of the available answers: there is
+ * nothing to read and nothing to press. Saying so turns it back into a screen
+ * with a button on it.
+ */
+const STALL_MS = 3 * 60 * 1000;
 
 export function OnboardingFlow({ capabilities }: { capabilities: Capabilities }) {
   const router = useRouter();
@@ -49,6 +60,8 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
   const [remedy, setRemedy] = useState<string | null>(null);
   const [reachedStep, setReachedStep] = useState(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const movedAtRef = useRef(Date.now());
+  const lastStepRef = useRef(0);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -59,13 +72,23 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
 
   useEffect(() => () => stopPolling(), [stopPolling]);
 
-  /** Maps real server state onto the visible checklist. */
+  /**
+   * Maps real server state onto the visible checklist.
+   *
+   * Every rung is a distinct piece of work that has genuinely finished. The
+   * old mapping put the whole analysis job on "Identifying audience", so any
+   * stall anywhere in it — reading the repository, understanding the product,
+   * or the audience itself — read as the audience step hanging, which was both
+   * wrong and impossible to act on.
+   */
   const stepFor = useCallback((s: AnalyzeState): number => {
     if (s.jobs.strategy?.status === 'succeeded') return STEPS.length;
-    if (s.jobs.strategy?.status === 'running') return 6;
-    if (s.analysis) return 5;
-    if (stillRunning(s.jobs.analyze)) return 2;
+    if (stillRunning(s.jobs.strategy)) return 4;
+    if (s.personas.length) return 3;
+    if (stillRunning(s.jobs.audience)) return 2;
+    if (s.analysis) return 2;
     if (s.repository) return 1;
+    if (stillRunning(s.jobs.analyze)) return 1;
     return 0;
   }, []);
 
@@ -81,7 +104,13 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
         if (!res.ok) throw new Error((json as never as { message: string }).message);
 
         setState(json);
-        setReachedStep((prev) => Math.max(prev, stepFor(json)));
+
+        const step = stepFor(json);
+        if (step > lastStepRef.current) {
+          lastStepRef.current = step;
+          movedAtRef.current = Date.now();
+        }
+        setReachedStep((prev) => Math.max(prev, step));
 
         // Not just 'dead'. A retryable failure requeues as 'queued', so
         // waiting for 'dead' meant spinning through every attempt and its
@@ -104,6 +133,19 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
           stopPolling();
           setReachedStep(STEPS.length);
           setPhase('done');
+          return;
+        }
+
+        // Nothing has moved for long enough that nothing is going to. Say what
+        // it was waiting on, rather than spinning on it indefinitely.
+        if (Date.now() - movedAtRef.current > STALL_MS) {
+          stopPolling();
+          setError(`FullSend got stuck on "${STEPS[Math.min(step, STEPS.length - 1)]}".`);
+          setRemedy(
+            'Nothing was lost — every step that finished is saved. Press Analyze again and ' +
+              'it will pick up from where it stopped rather than starting over.',
+          );
+          setPhase('error');
         }
       } catch (e) {
         stopPolling();
@@ -120,6 +162,8 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
     setRemedy(null);
     setPhase('working');
     setReachedStep(0);
+    lastStepRef.current = 0;
+    movedAtRef.current = Date.now();
 
     try {
       const res = await fetch('/api/projects', {
