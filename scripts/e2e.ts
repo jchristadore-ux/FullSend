@@ -235,16 +235,9 @@ ${X}`);
   );
 
   /* 2. Audience. */
-  stage('Target audience');
-  check(
-    analyzed.personas.length > 0,
-    'Personas built',
-    analyzed.personas.map((p) => p.name).join(' · '),
-  );
-
   /* 3. Strategy. */
   stage('Marketing strategy');
-  const built = await buildStrategy(scope, project, analysis, analyzed.personas);
+  const built = await buildStrategy(scope, project, analysis);
   const mixTotal = Object.values(built.strategy.content_mix).reduce((a, b) => a + b, 0);
   ok('Positioning', built.strategy.positioning.slice(0, 90) + '…');
   check(mixTotal === 100, 'Content mix totals 100', JSON.stringify(built.strategy.content_mix));
@@ -309,7 +302,7 @@ ${X}`);
     analysis,
     brand: built.brand,
     strategy,
-    personas: analyzed.personas,
+    personas: [],
     pillars: built.pillars,
     campaigns: built.campaigns,
     slots,

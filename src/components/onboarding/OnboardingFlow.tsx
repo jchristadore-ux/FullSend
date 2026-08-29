@@ -18,11 +18,9 @@ import { hasFailed, stillRunning, type JobProgress } from '@/lib/jobs/job-failur
 const STEPS = [
   'Reading repository',
   'Understanding product',
-  'Identifying audience',
-  'Finding differentiators',
-  'Building positioning',
-  'Creating content strategy',
-  'Planning first campaign',
+  'Building the marketing plan',
+  'Writing the content',
+  'Building the schedule',
 ];
 
 type Phase = 'input' | 'working' | 'done' | 'error';
@@ -35,7 +33,6 @@ interface AnalyzeState {
   screenshots: { withImages: number; describedOnly: number; note: string } | null;
   jobs: {
     analyze: JobProgress | null;
-    audience: JobProgress | null;
     strategy: JobProgress | null;
   };
 }
@@ -75,17 +72,12 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
   /**
    * Maps real server state onto the visible checklist.
    *
-   * Every rung is a distinct piece of work that has genuinely finished. The
-   * old mapping put the whole analysis job on "Identifying audience", so any
-   * stall anywhere in it — reading the repository, understanding the product,
-   * or the audience itself — read as the audience step hanging, which was both
-   * wrong and impossible to act on.
+   * Every rung is a distinct piece of work that has genuinely finished, and
+   * each one is a stage the founder can see and retry on its own.
    */
   const stepFor = useCallback((s: AnalyzeState): number => {
     if (s.jobs.strategy?.status === 'succeeded') return STEPS.length;
-    if (stillRunning(s.jobs.strategy)) return 4;
-    if (s.personas.length) return 3;
-    if (stillRunning(s.jobs.audience)) return 2;
+    if (stillRunning(s.jobs.strategy)) return 2;
     if (s.analysis) return 2;
     if (s.repository) return 1;
     if (stillRunning(s.jobs.analyze)) return 1;

@@ -8,7 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createProject, fakeGitHubClient, setupContext, teardown, type TestContext } from './helpers';
-import { analyzeProduct, identifyAudience } from '@/lib/analysis/analyze';
+import { analyzeProduct } from '@/lib/analysis/analyze';
 import { buildStrategy } from '@/lib/strategy/build';
 import { getProvider, setProvider } from '@/lib/ai/client';
 import { db, enqueueOnce, getAnalysis, getStrategy } from '@/lib/db/repo';
@@ -63,7 +63,6 @@ describe('durable, resumable pipeline', () => {
     const product = await analyzeProduct(ctx.scope, project, 'acme/taskflow', {
       client: fakeGitHubClient(),
     });
-    await identifyAudience(ctx.scope, project, product.analysis);
     await run('generate_strategy');
     return product.analysis;
   }

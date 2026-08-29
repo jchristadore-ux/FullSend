@@ -54,7 +54,6 @@ describe('FullSend end-to-end chain', () => {
     expect(analyzed.repository.name).toBe('taskflow');
     expect(analyzed.analysis.one_liner.length).toBeGreaterThan(5);
     expect(analyzed.analysis.features.length).toBeGreaterThan(0);
-    expect(analyzed.personas.length).toBeGreaterThan(0);
 
     /* 2. Product understanding is grounded in the repo. */
     expect(analyzed.analysis.screens.length).toBeGreaterThan(0);
@@ -65,7 +64,6 @@ describe('FullSend end-to-end chain', () => {
       ctx.scope,
       project,
       analyzed.analysis,
-      analyzed.personas,
     );
     expect(strategy.pillars.length).toBeGreaterThan(0);
     expect(strategy.campaigns.length).toBeGreaterThan(0);
@@ -96,7 +94,7 @@ describe('FullSend end-to-end chain', () => {
       analysis: analyzed.analysis,
       brand: strategy.brand,
       strategy: approvedStrategy,
-      personas: analyzed.personas,
+      personas: [],
       pillars: strategy.pillars,
       campaigns: strategy.campaigns,
       slots: slots.slice(0, 12),

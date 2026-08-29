@@ -80,7 +80,13 @@ export async function buildStrategy(
   scope: TenantScope,
   project: Project,
   analysis: ProductAnalysis,
-  personas: Persona[],
+  /**
+   * Optional, and in practice empty. The audience step that produced these was
+   * removed: the analysis already carries the target market, the problem
+   * solved and the differentiators, so a separate model call to name personas
+   * restated what was known while adding a stage that could fail.
+   */
+  personas: Persona[] = [],
   opts: { refresh?: boolean } = {},
 ): Promise<StrategyResult> {
   if (!opts.refresh) {

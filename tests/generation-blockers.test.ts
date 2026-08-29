@@ -53,7 +53,7 @@ describe('generation blockers', () => {
     const analyzed = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
       client: fakeGitHubClient(),
     });
-    await buildStrategy(ctx.scope, project, analyzed.analysis, analyzed.personas);
+    await buildStrategy(ctx.scope, project, analyzed.analysis);
 
     const blocked = await generationBlocker(ctx.scope, project);
     expect(blocked?.code).toBe('strategy_unapproved');
@@ -67,7 +67,7 @@ describe('generation blockers', () => {
     const analyzed = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
       client: fakeGitHubClient(),
     });
-    const built = await buildStrategy(ctx.scope, project, analyzed.analysis, analyzed.personas);
+    const built = await buildStrategy(ctx.scope, project, analyzed.analysis);
     await approveStrategy(ctx.scope, built.strategy.id);
 
     expect(await generationBlocker(ctx.scope, project)).toBeNull();
@@ -77,7 +77,7 @@ describe('generation blockers', () => {
     const analyzed = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
       client: fakeGitHubClient(),
     });
-    await buildStrategy(ctx.scope, project, analyzed.analysis, analyzed.personas);
+    await buildStrategy(ctx.scope, project, analyzed.analysis);
 
     const result = await topUpContent(ctx.scope, project, 30);
     expect(result.generated).toBe(0);
