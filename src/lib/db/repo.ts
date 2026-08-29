@@ -263,6 +263,55 @@ export async function enqueue(
   });
 }
 
+/**
+ * Enqueues a job unless the same work is already waiting or running.
+ *
+ * Every refresh of the onboarding page, every retry, and every chained handoff
+ * used to create another row. Ten presses of Analyze meant ten analyses of the
+ * same repository, all racing each other, all billed. A stage that is already
+ * in flight does not need a second copy of itself, so this is the enqueue every
+ * pipeline handoff uses.
+ */
+const enqueueLocks = new Map<string, Promise<unknown>>();
+
+export async function enqueueOnce(
+  scope: TenantScope,
+  type: JobType,
+  payload: Record<string, unknown>,
+  opts: { projectId?: Uuid | null; runAfter?: string; maxAttempts?: number } = {},
+): Promise<{ job: Job; created: boolean }> {
+  const projectId = opts.projectId ?? null;
+  if (!projectId) return { job: await enqueue(scope, type, payload, opts), created: true };
+
+  /*
+   * Serialised per project and type. Checking for an open job and then
+   * inserting one is two steps, and three simultaneous requests all completed
+   * the check before any of them inserted — which is exactly how ten presses
+   * of Analyze became ten concurrent analyses of the same repository.
+   */
+  const key = `${projectId}:${type}`;
+  const prior = enqueueLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  enqueueLocks.set(key, gate);
+  await prior.catch(() => {});
+
+  try {
+    const open = await db().find(scope, 'jobs', {
+      where: { project_id: projectId, type },
+      whereIn: { status: ['queued', 'running'] },
+      orderBy: 'created_at',
+      direction: 'asc',
+      limit: 1,
+    });
+    if (open.length) return { job: open[0], created: false };
+    return { job: await enqueue(scope, type, payload, opts), created: true };
+  } finally {
+    release();
+    if (enqueueLocks.get(key) === gate) enqueueLocks.delete(key);
+  }
+}
+
 export async function recordError(
   scope: TenantScope,
   input: {

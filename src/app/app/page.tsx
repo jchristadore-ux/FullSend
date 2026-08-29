@@ -5,6 +5,7 @@ import { activeProject } from '@/lib/active-project';
 import { formatCompact, formatSendTime, loadSendCenter, relativeTime } from '@/lib/dashboard';
 import { scoreVerdict } from '@/lib/analytics/send-score';
 import { NextMoveCard } from '@/components/app/NextMoveCard';
+import { PipelineCard } from '@/components/app/PipelineCard';
 import { AttentionBanner } from '@/components/app/AttentionBanner';
 import { MobileSummary } from '@/components/app/MobileSummary';
 
@@ -63,6 +64,9 @@ export default async function SendCenter() {
       {data.strategyApproved && data.accounts.length === 0 && (
         <SetupPrompt href="/app/accounts" label="Connect Instagram or TikTok to publish" />
       )}
+
+      {/* Where the machine actually is, and what to press when a step fails. */}
+      <PipelineCard projectId={project.id} />
 
       {/* On a phone, four facts and a tap. The full command centre is desktop. */}
       <MobileSummary data={data} />

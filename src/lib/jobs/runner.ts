@@ -11,7 +11,7 @@
 import 'server-only';
 import { env } from '../env';
 import { systemScope } from '../db';
-import { db, enqueue, getAnalysis, recordError } from '../db/repo';
+import { db, enqueue, enqueueOnce, getAnalysis, recordError } from '../db/repo';
 import { isFullSendError } from '../errors';
 import { nowIso } from '../ids';
 import { logger } from '../logger';
@@ -66,7 +66,7 @@ const handlers: Record<JobType, Handler> = {
       });
       // The audience is its own job. Both used to run here, and two sequential
       // model calls plus a GitHub crawl do not fit in one invocation.
-      await enqueue(scope, 'identify_audience', { projectId, refresh }, { projectId });
+      await enqueueOnce(scope, 'identify_audience', { projectId, refresh }, { projectId });
       return {
         analysisId: result.analysis.id,
         features: result.analysis.features.length,
@@ -106,7 +106,7 @@ const handlers: Record<JobType, Handler> = {
      * recorded against the project, and re-running the analysis retries this
      * step alone because no personas were written.
      */
-    await enqueue(scope, 'generate_strategy', { projectId }, { projectId });
+    await enqueueOnce(scope, 'generate_strategy', { projectId }, { projectId });
     return { personas: result.personas.length, costUsd: result.costUsd, error: result.error };
   },
 
@@ -124,16 +124,37 @@ const handlers: Record<JobType, Handler> = {
     if (!analysis) throw new Error('No product analysis to build a strategy from');
     const personas = await db().find(scope, 'personas', { where: { project_id: projectId } });
 
-    const result = await buildStrategy(scope, project, analysis, personas);
+    const result = await buildStrategy(scope, project, analysis, personas, {
+      refresh: Boolean(job.payload.refresh),
+    });
     await db().update(scope, 'projects', projectId, {
       status: 'strategy_ready',
       updated_at: nowIso(),
     });
+
+    /*
+     * Full Send means the machine acts. The plan was being saved and then left
+     * sitting unapproved, which `generationBlocker` reads as a reason not to
+     * write anything — so the pipeline reached step two and stopped, with a
+     * finished strategy and an empty calendar.
+     */
+    if (project.autopilot_mode === 'full_send' && !result.strategy.approved) {
+      await db().update(scope, 'marketing_strategies', result.strategy.id, {
+        approved: true,
+        approved_at: nowIso(),
+      });
+    }
+
+    // Step three follows step two. Nothing else was enqueuing it, so a founder
+    // who never pressed Approve never got content at all.
+    await enqueueOnce(scope, 'generate_content', { projectId }, { projectId });
+
     return {
       strategyId: result.strategy.id,
       pillars: result.pillars.length,
       campaigns: result.campaigns.length,
       costUsd: result.costUsd,
+      reused: result.costUsd === 0,
     };
   },
 
@@ -157,7 +178,7 @@ const handlers: Record<JobType, Handler> = {
         status: 'content_ready',
         updated_at: nowIso(),
       });
-      await enqueue(scope, 'schedule_content', { projectId }, { projectId });
+      await enqueueOnce(scope, 'schedule_content', { projectId }, { projectId });
     }
     return { ...result };
   },
