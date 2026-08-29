@@ -238,3 +238,98 @@ describe('durable, resumable pipeline', () => {
     expect((await pipelineState(ctx.scope, project)).failedStage).toBeNull();
   });
 });
+
+/**
+ * The deadlock that made Retry do nothing.
+ *
+ * A serverless invocation killed at sixty seconds leaves `status: 'running'`
+ * and a claim nobody releases. Everything downstream read that as work in
+ * progress: the pipeline showed a spinner with no button under it, and
+ * `enqueueOnce` refused to start the stage again because a copy was supposedly
+ * already in flight. Nothing was running. Nothing could be started.
+ */
+describe('a job whose worker died', () => {
+  let ctx: TestContext;
+  let project: Project;
+
+  beforeEach(async () => {
+    ctx = await setupContext();
+    project = await createProject(ctx.scope, ctx.user.id, { autopilot_mode: 'full_send' });
+  });
+
+  afterEach(() => teardown());
+
+  /** A job claimed long enough ago that its worker cannot still be alive. */
+  async function stalledJob(type: JobType) {
+    const { job } = await enqueueOnce(
+      ctx.scope,
+      type,
+      { projectId: project.id },
+      { projectId: project.id },
+    );
+    return db().update(ctx.scope, 'jobs', job.id, {
+      status: 'running',
+      locked_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+    });
+  }
+
+  it('is offered as a retry rather than an endless spinner', async () => {
+    await stalledJob('analyze_repository');
+
+    const state = await pipelineState(ctx.scope, project);
+    const analysis = state.stages.find((s) => s.name === 'analysis')!;
+
+    expect(analysis.status).toBe('failed');
+    expect(analysis.retryable).toBe(true);
+    expect(analysis.error).toMatch(/cut off part-way/);
+    expect(state.failedStage).toBe('analysis');
+  });
+
+  it('does not block the stage from being started again', async () => {
+    const dead = await stalledJob('analyze_repository');
+
+    const { job, created } = await enqueueOnce(
+      ctx.scope,
+      'analyze_repository',
+      { projectId: project.id },
+      { projectId: project.id },
+    );
+
+    expect(created).toBe(true);
+    expect(job.id).not.toBe(dead.id);
+  });
+
+  it('still refuses to duplicate a job that is genuinely running', async () => {
+    const { job: first } = await enqueueOnce(
+      ctx.scope,
+      'analyze_repository',
+      { projectId: project.id },
+      { projectId: project.id },
+    );
+    await db().update(ctx.scope, 'jobs', first.id, {
+      status: 'running',
+      locked_at: new Date().toISOString(),
+    });
+
+    const { job, created } = await enqueueOnce(
+      ctx.scope,
+      'analyze_repository',
+      { projectId: project.id },
+      { projectId: project.id },
+    );
+
+    expect(created).toBe(false);
+    expect(job.id).toBe(first.id);
+
+    const state = await pipelineState(ctx.scope, project);
+    expect(state.stages.find((s) => s.name === 'analysis')!.status).toBe('in_progress');
+  });
+
+  it('leaves a completed stage complete even with a dead claim against it', async () => {
+    await analyzeProduct(ctx.scope, project, 'acme/taskflow', { client: fakeGitHubClient() });
+    await stalledJob('analyze_repository');
+
+    const state = await pipelineState(ctx.scope, project);
+    expect(state.stages.find((s) => s.name === 'analysis')!.status).toBe('complete');
+  });
+});

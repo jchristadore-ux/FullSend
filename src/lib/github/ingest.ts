@@ -243,14 +243,26 @@ async function buildScreens(
     .filter((r) => !r.includes('[') && !r.includes(':'))
     .slice(0, 8);
 
-  const screens: AppScreen[] = [];
-  for (const route of interesting) {
-    const sourceFile = findSourceForRoute(files, route);
-    let elements: string[] = [];
-    if (sourceFile) {
+  /*
+   * Fetched together rather than one after another.
+   *
+   * These were eight sequential round trips to GitHub, in the same serverless
+   * invocation as the model call that follows them, under a sixty-second
+   * ceiling. On a repository with real routes that is most of the budget spent
+   * before the analysis starts — and an invocation killed here leaves a job
+   * claimed and a stage that never reports back.
+   */
+  const sources = await Promise.all(
+    interesting.map(async (route) => {
+      const sourceFile = findSourceForRoute(files, route);
+      if (!sourceFile) return { route, sourceFile: null, elements: [] as string[] };
       const src = await client.getFile(ref, sourceFile, meta.default_branch);
-      if (src) elements = extractUiElements(src);
-    }
+      return { route, sourceFile, elements: src ? extractUiElements(src) : [] };
+    }),
+  );
+
+  const screens: AppScreen[] = [];
+  for (const { route, sourceFile, elements } of sources) {
     const name = route === '/' ? 'Home' : titleize(route.split('/').filter(Boolean).pop() ?? route);
     screens.push({
       name,
