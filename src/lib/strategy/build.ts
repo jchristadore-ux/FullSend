@@ -65,12 +65,39 @@ export interface StrategyResult {
   costUsd: number;
 }
 
+/**
+ * Builds the marketing plan, or returns the one already saved.
+ *
+ * The plan is a durable checkpoint: strategy, pillars, campaigns and the brand
+ * profile together. It was rebuilt from scratch on every run of the job — a
+ * premium-tier call and a second model call for the brand — which meant a
+ * restart, a retry, or a refresh silently paid for a plan that already existed
+ * and replaced the one downstream content was written against.
+ *
+ * `refresh` is the deliberate regeneration the founder asks for.
+ */
 export async function buildStrategy(
   scope: TenantScope,
   project: Project,
   analysis: ProductAnalysis,
   personas: Persona[],
+  opts: { refresh?: boolean } = {},
 ): Promise<StrategyResult> {
+  if (!opts.refresh) {
+    const [existing, existingBrand] = await Promise.all([
+      getStrategy(scope, project.id),
+      getBrandProfile(scope, project.id),
+    ]);
+    if (existing && existingBrand) {
+      const [pillars, campaigns] = await Promise.all([
+        db().find(scope, 'content_pillars', { where: { project_id: project.id } }),
+        db().find(scope, 'campaigns', { where: { project_id: project.id } }),
+      ]);
+      log.info('reusing the saved marketing plan', { project: project.id, version: existing.version });
+      return { strategy: existing, pillars, campaigns, brand: existingBrand, costUsd: 0 };
+    }
+  }
+
   const { data, costUsd: strategyCost } = await generateObject({
     task: 'strategy.build',
     system: STRATEGY_SYSTEM,
