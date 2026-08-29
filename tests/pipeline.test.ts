@@ -18,7 +18,7 @@ import {
   type TestContext,
 } from './helpers';
 import { analyzeRepository } from '@/lib/analysis/analyze';
-import { approveStrategy, buildStrategy } from '@/lib/strategy/build';
+import { approveStrategy, buildStrategy, ensureBrandProfile } from '@/lib/strategy/build';
 import { generateContent } from '@/lib/content/generate';
 import { openSlots, queueDepth, scheduleContent } from '@/lib/scheduler/schedule';
 import { publishScheduledPost } from '@/lib/publish/publish';
@@ -60,14 +60,13 @@ describe('FullSend end-to-end chain', () => {
     expect(analyzed.analysis.not_capabilities.length).toBeGreaterThan(0);
 
     /* 3. Strategy, pillars, campaigns, brand. */
-    const strategy = await buildStrategy(
-      ctx.scope,
-      project,
-      analyzed.analysis,
-    );
+    const strategy = await buildStrategy(ctx.scope, project, analyzed.analysis);
+    strategy.brand = (
+      await ensureBrandProfile(ctx.scope, project, analyzed.analysis, strategy.strategy)
+    ).brand;
     expect(strategy.pillars.length).toBeGreaterThan(0);
     expect(strategy.campaigns.length).toBeGreaterThan(0);
-    expect(strategy.brand.words_to_avoid.length).toBeGreaterThan(0);
+    expect(strategy.brand!.words_to_avoid.length).toBeGreaterThan(0);
 
     const mixTotal = Object.values(strategy.strategy.content_mix).reduce((a, b) => a + b, 0);
     expect(mixTotal).toBe(100);
@@ -92,7 +91,7 @@ describe('FullSend end-to-end chain', () => {
     const generated = await generateContent(ctx.scope, {
       project,
       analysis: analyzed.analysis,
-      brand: strategy.brand,
+      brand: strategy.brand!,
       strategy: approvedStrategy,
       personas: [],
       pillars: strategy.pillars,

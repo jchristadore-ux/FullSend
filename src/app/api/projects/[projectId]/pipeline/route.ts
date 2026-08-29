@@ -30,9 +30,6 @@ export const POST = projectRoute(
     if (target.status === 'complete' && !body.refresh) {
       return { stage, started: false, reason: 'Already complete. Nothing was re-run.', state };
     }
-    if (target.status === 'in_progress') {
-      return { stage, started: false, reason: 'Already running.', state };
-    }
 
     const payload = await stagePayload(session.scope, project, stage);
     const { created } = await enqueueOnce(

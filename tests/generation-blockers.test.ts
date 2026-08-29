@@ -15,7 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createProject, fakeGitHubClient, setupContext, teardown, type TestContext } from './helpers';
 import { analyzeRepository } from '@/lib/analysis/analyze';
-import { approveStrategy, buildStrategy } from '@/lib/strategy/build';
+import { approveStrategy, buildStrategy, ensureBrandProfile } from '@/lib/strategy/build';
 import { generationBlocker, topUpContent } from '@/lib/automation/autopilot';
 import { longerWindowHelps } from '@/lib/content/blockers';
 import { describeGenerationOutcome } from '@/lib/jobs/generation-outcome';
@@ -53,7 +53,8 @@ describe('generation blockers', () => {
     const analyzed = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
       client: fakeGitHubClient(),
     });
-    await buildStrategy(ctx.scope, project, analyzed.analysis);
+    const s0 = await buildStrategy(ctx.scope, project, analyzed.analysis);
+    await ensureBrandProfile(ctx.scope, project, analyzed.analysis, s0.strategy);
 
     const blocked = await generationBlocker(ctx.scope, project);
     expect(blocked?.code).toBe('strategy_unapproved');
@@ -68,6 +69,7 @@ describe('generation blockers', () => {
       client: fakeGitHubClient(),
     });
     const built = await buildStrategy(ctx.scope, project, analyzed.analysis);
+    await ensureBrandProfile(ctx.scope, project, analyzed.analysis, built.strategy);
     await approveStrategy(ctx.scope, built.strategy.id);
 
     expect(await generationBlocker(ctx.scope, project)).toBeNull();
@@ -77,7 +79,8 @@ describe('generation blockers', () => {
     const analyzed = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
       client: fakeGitHubClient(),
     });
-    await buildStrategy(ctx.scope, project, analyzed.analysis);
+    const s0 = await buildStrategy(ctx.scope, project, analyzed.analysis);
+    await ensureBrandProfile(ctx.scope, project, analyzed.analysis, s0.strategy);
 
     const result = await topUpContent(ctx.scope, project, 30);
     expect(result.generated).toBe(0);

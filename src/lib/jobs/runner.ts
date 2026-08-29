@@ -16,7 +16,7 @@ import { isFullSendError } from '../errors';
 import { nowIso } from '../ids';
 import { logger } from '../logger';
 import { systemAnalyzeProduct } from '../analysis/analyze';
-import { buildStrategy } from '../strategy/build';
+import { buildStrategy, ensureBrandProfile } from '../strategy/build';
 import { collectAnalytics } from '../analytics/collect';
 import { optimize } from '../optimizer/optimize';
 import { scheduleContent } from '../scheduler/schedule';
@@ -123,9 +123,8 @@ const handlers: Record<JobType, Handler> = {
       });
     }
 
-    // Step three follows step two. Nothing else was enqueuing it, so a founder
-    // who never pressed Approve never got content at all.
-    await enqueueOnce(scope, 'generate_content', { projectId }, { projectId });
+    // The brand profile is the second model call of the plan, and its own job.
+    await enqueueOnce(scope, 'generate_brand', { projectId }, { projectId });
 
     return {
       strategyId: result.strategy.id,
@@ -134,6 +133,30 @@ const handlers: Record<JobType, Handler> = {
       costUsd: result.costUsd,
       reused: result.costUsd === 0,
     };
+  },
+
+  generate_brand: async (job) => {
+    const scope = systemScope('job:generate_brand');
+    const projectId = String(job.payload.projectId);
+    const project = await db().get(scope, 'projects', projectId);
+    if (!project) throw new Error(`Project ${projectId} not found`);
+
+    const analysis = await getAnalysis(scope, projectId);
+    if (!analysis) throw new Error('No product analysis to build a brand profile from');
+    const strategy = await db().findOne(scope, 'marketing_strategies', {
+      where: { project_id: projectId },
+      orderBy: 'version',
+      direction: 'desc',
+    });
+    if (!strategy) throw new Error('No strategy to build a brand profile from');
+
+    const { brand, costUsd } = await ensureBrandProfile(scope, project, analysis, strategy, {
+      refresh: Boolean(job.payload.refresh),
+    });
+
+    // Step three follows step two.
+    await enqueueOnce(scope, 'generate_content', { projectId }, { projectId });
+    return { brandId: brand.id, costUsd, reused: costUsd === 0 };
   },
 
   generate_content: async (job) => {

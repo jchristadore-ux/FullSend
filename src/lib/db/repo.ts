@@ -313,7 +313,7 @@ export async function enqueueOnce(
      * answer to every request to start the stage again.
      */
     const live = open.find(
-      (j) => !isStalled({ status: j.status, lockedAt: j.locked_at }),
+      (j) => !isStalled({ status: j.status, lockedAt: j.locked_at, updatedAt: j.updated_at }),
     );
     if (live) return { job: live, created: false };
     return { job: await enqueue(scope, type, payload, opts), created: true };

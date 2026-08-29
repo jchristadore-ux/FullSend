@@ -62,7 +62,7 @@ const LABELS: Record<StageName, string> = {
 /** The jobs that advance each stage. A stage is running if any of these are. */
 export const STAGE_JOBS: Record<StageName, JobType[]> = {
   analysis: ['analyze_repository'],
-  marketing_plan: ['generate_strategy'],
+  marketing_plan: ['generate_strategy', 'generate_brand'],
   content: ['generate_content'],
   schedule: ['schedule_content'],
 };
@@ -127,6 +127,7 @@ export async function pipelineState(
       attempts: j!.attempts,
       error: j!.last_error,
       lockedAt: j!.locked_at,
+      updatedAt: j!.updated_at,
     }));
 
     const failure = progress.find((p) => hasFailed(p));
@@ -163,7 +164,13 @@ export async function pipelineState(
               'Press Retry — everything already saved is kept.'
             : (failure?.error ?? 'This step failed')
           : null,
-      retryable: status === 'failed' || status === 'not_started',
+      /*
+       * Anything not finished can be started by hand. A stage showing a
+       * spinner with no button was the worst state this screen could reach:
+       * nothing to read, nothing to press, and no way to tell a slow step from
+       * a dead one.
+       */
+      retryable: status !== 'complete',
     });
   }
 

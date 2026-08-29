@@ -64,6 +64,7 @@ describe('durable, resumable pipeline', () => {
       client: fakeGitHubClient(),
     });
     await run('generate_strategy');
+    await run('generate_brand');
     return product.analysis;
   }
 
@@ -407,5 +408,108 @@ describe('starting the same repository twice', () => {
     const first = await start('acme/taskflow');
     const second = await start('ACME/TaskFlow');
     expect(second.project.id).toBe(first.project.id);
+  });
+});
+
+/**
+ * The plan stage, split.
+ *
+ * Strategy and brand profile are two model calls. Run in one job they do not
+ * fit in a sixty-second invocation: the stage sat on "Working" for as long as
+ * anyone watched, because the invocation was killed before either could finish
+ * and there was nothing to report. And a queued job nobody has reached leaves
+ * no lock to expire, so the spinner had no button under it and no way out.
+ */
+describe('the marketing plan', () => {
+  let ctx: TestContext;
+  let project: Project;
+
+  beforeEach(async () => {
+    ctx = await setupContext();
+    project = await createProject(ctx.scope, ctx.user.id, { autopilot_mode: 'full_send' });
+  });
+
+  afterEach(() => teardown());
+
+  async function run(type: JobType) {
+    const { job } = await enqueueOnce(
+      ctx.scope,
+      type,
+      { projectId: project.id },
+      { projectId: project.id },
+    );
+    return runJob({ ...((await db().get(ctx.scope, 'jobs', job.id)) as Job), attempts: 1 });
+  }
+
+  it('runs as two jobs, and the strategy job makes only one model call', async () => {
+    await analyzeProduct(ctx.scope, project, 'acme/taskflow', { client: fakeGitHubClient() });
+    await run('generate_strategy');
+
+    expect(await getStrategy(ctx.scope, project.id)).not.toBeNull();
+    // The brand is the second job's work, not this one's.
+    expect(await db().findOne(ctx.scope, 'brand_profiles', {
+      where: { project_id: project.id },
+    })).toBeNull();
+
+    const queued = await db().find(ctx.scope, 'jobs', {
+      where: { project_id: project.id, type: 'generate_brand' },
+    });
+    expect(queued).toHaveLength(1);
+  });
+
+  it('is complete only once both halves are saved, then starts content', async () => {
+    await analyzeProduct(ctx.scope, project, 'acme/taskflow', { client: fakeGitHubClient() });
+    await run('generate_strategy');
+
+    const half = await pipelineState(ctx.scope, project);
+    expect(half.stages.find((s) => s.name === 'marketing_plan')!.status).not.toBe('complete');
+
+    await run('generate_brand');
+
+    const whole = await pipelineState(ctx.scope, project);
+    expect(whole.stages.find((s) => s.name === 'marketing_plan')!.status).toBe('complete');
+    const next = await db().find(ctx.scope, 'jobs', {
+      where: { project_id: project.id, type: 'generate_content' },
+    });
+    expect(next).toHaveLength(1);
+  });
+
+  it('does not rebuild the brand profile it already has', async () => {
+    await analyzeProduct(ctx.scope, project, 'acme/taskflow', { client: fakeGitHubClient() });
+    await run('generate_strategy');
+    await run('generate_brand');
+
+    const first = await db().findOne(ctx.scope, 'brand_profiles', {
+      where: { project_id: project.id },
+    });
+    await run('generate_brand');
+    const again = await db().findOne(ctx.scope, 'brand_profiles', {
+      where: { project_id: project.id },
+    });
+    expect(again!.id).toBe(first!.id);
+  });
+
+  it('offers a button on a queued job nothing has reached', async () => {
+    await analyzeProduct(ctx.scope, project, 'acme/taskflow', { client: fakeGitHubClient() });
+    const { job } = await enqueueOnce(
+      ctx.scope,
+      'generate_strategy',
+      { projectId: project.id },
+      { projectId: project.id },
+    );
+    const old = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    await db().update(ctx.scope, 'jobs', job.id, { updated_at: old });
+
+    const state = await pipelineState(ctx.scope, project);
+    const plan = state.stages.find((s) => s.name === 'marketing_plan')!;
+    expect(plan.status).toBe('failed');
+    expect(plan.retryable).toBe(true);
+  });
+
+  it('gives every unfinished stage a button, running or not', async () => {
+    const state = await pipelineState(ctx.scope, project);
+    for (const s of state.stages) {
+      if (s.status !== 'complete') expect(s.retryable).toBe(true);
+    }
   });
 });
