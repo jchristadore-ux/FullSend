@@ -61,7 +61,7 @@ const LABELS: Record<StageName, string> = {
 
 /** The jobs that advance each stage. A stage is running if any of these are. */
 export const STAGE_JOBS: Record<StageName, JobType[]> = {
-  analysis: ['analyze_repository', 'identify_audience'],
+  analysis: ['analyze_repository'],
   marketing_plan: ['generate_strategy'],
   content: ['generate_content'],
   schedule: ['schedule_content'],

@@ -15,7 +15,7 @@ import { db, enqueue, enqueueOnce, getAnalysis, recordError } from '../db/repo';
 import { isFullSendError } from '../errors';
 import { nowIso } from '../ids';
 import { logger } from '../logger';
-import { identifyAudience, systemAnalyzeProduct } from '../analysis/analyze';
+import { systemAnalyzeProduct } from '../analysis/analyze';
 import { buildStrategy } from '../strategy/build';
 import { collectAnalytics } from '../analytics/collect';
 import { optimize } from '../optimizer/optimize';
@@ -64,9 +64,11 @@ const handlers: Record<JobType, Handler> = {
         status: 'analyzed',
         updated_at: nowIso(),
       });
-      // The audience is its own job. Both used to run here, and two sequential
-      // model calls plus a GitHub crawl do not fit in one invocation.
-      await enqueueOnce(scope, 'identify_audience', { projectId, refresh }, { projectId });
+      // Straight to the marketing plan. There is no audience step: the product
+      // analysis already carries the target market, the problem solved and the
+      // differentiators, so a separate model call to restate them was a stage
+      // that could fail without ever adding anything the plan did not have.
+      await enqueueOnce(scope, 'generate_strategy', { projectId, refresh }, { projectId });
       return {
         analysisId: result.analysis.id,
         features: result.analysis.features.length,
@@ -84,30 +86,6 @@ const handlers: Record<JobType, Handler> = {
       await db().update(scope, 'projects', projectId, { status: kept ? 'analyzed' : 'failed' });
       throw e;
     }
-  },
-
-  identify_audience: async (job) => {
-    const scope = systemScope('job:identify_audience');
-    const projectId = String(job.payload.projectId);
-    const project = await db().get(scope, 'projects', projectId);
-    if (!project) throw new Error(`Project ${projectId} not found`);
-
-    const analysis = await getAnalysis(scope, projectId);
-    if (!analysis) throw new Error('No product analysis to identify an audience from');
-
-    const result = await identifyAudience(scope, project, analysis, {
-      refresh: Boolean(job.payload.refresh),
-    });
-
-    /*
-     * Strategy is enqueued either way. A missing audience is a worse plan, not
-     * no plan, and the whole point of splitting these apart is that one step
-     * stalling can no longer hold the machine still. The failure is already
-     * recorded against the project, and re-running the analysis retries this
-     * step alone because no personas were written.
-     */
-    await enqueueOnce(scope, 'generate_strategy', { projectId }, { projectId });
-    return { personas: result.personas.length, costUsd: result.costUsd, error: result.error };
   },
 
   generate_strategy: async (job) => {

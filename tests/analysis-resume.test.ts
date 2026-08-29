@@ -49,9 +49,7 @@ describe('analysis resumes where it stopped', () => {
       client: fakeGitHubClient(),
     });
 
-    expect(result.ran).toEqual({ ingest: true, analysis: true, personas: true });
-    expect(result.personaError).toBeNull();
-    expect(result.personas.length).toBeGreaterThan(0);
+    expect(result.ran).toEqual({ ingest: true, analysis: true });
   });
 
   it('does not read the repository or re-analyse it on a second run', async () => {
@@ -64,7 +62,7 @@ describe('analysis resumes where it stopped', () => {
 
     const second = await analyzeRepository(ctx.scope, project, 'acme/taskflow', { client });
 
-    expect(second.ran).toEqual({ ingest: false, analysis: false, personas: false });
+    expect(second.ran).toEqual({ ingest: false, analysis: false });
     expect(getRepo).not.toHaveBeenCalled();
     expect(second.analysis.id).toBe(first.analysis.id);
     expect(second.costUsd).toBe(0);
@@ -78,48 +76,10 @@ describe('analysis resumes where it stopped', () => {
       refresh: true,
     });
 
-    expect(refreshed.ran).toEqual({ ingest: true, analysis: true, personas: true });
+    expect(refreshed.ran).toEqual({ ingest: true, analysis: true });
   });
 
-  it('keeps the product analysis when the audience step fails', async () => {
-    setProvider(providerFailingOn('analysis.personas'));
 
-    const result = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
-      client: fakeGitHubClient(),
-    });
-
-    // The understanding survives, so strategy and content still have a base.
-    expect(result.analysis.one_liner.length).toBeGreaterThan(5);
-    expect(result.personas).toEqual([]);
-    expect(result.personaError).toMatch(/provider exploded/);
-
-    // And the founder is told, without it reading as a dead end.
-    const errors = await db().find(ctx.scope, 'automation_errors', {
-      where: { project_id: project.id },
-    });
-    const persona = errors.find((e) => e.scope === 'analysis.personas');
-    expect(persona?.fatal).toBe(false);
-    expect(persona?.message).toMatch(/Could not identify the audience/);
-  });
-
-  it('retries only the audience step after that failure', async () => {
-    setProvider(providerFailingOn('analysis.personas'));
-    const failed = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
-      client: fakeGitHubClient(),
-    });
-
-    setProvider(null);
-    const client = fakeGitHubClient();
-    const getRepo = vi.spyOn(client, 'getRepo');
-
-    const retry = await analyzeRepository(ctx.scope, project, 'acme/taskflow', { client });
-
-    expect(retry.ran).toEqual({ ingest: false, analysis: false, personas: true });
-    expect(getRepo).not.toHaveBeenCalled();
-    expect(retry.analysis.id).toBe(failed.analysis.id);
-    expect(retry.personas.length).toBeGreaterThan(0);
-    expect(retry.personaError).toBeNull();
-  });
 });
 
 describe('the job that drives it', () => {
@@ -151,93 +111,5 @@ describe('the job that drives it', () => {
 
     const after = await db().get(ctx.scope, 'projects', project.id);
     expect(after?.status).toBe('analyzed');
-  });
-});
-
-/**
- * The split that stops the stall.
- *
- * Ingest, product analysis and audience ran as one job inside one serverless
- * invocation with a sixty-second ceiling. Two sequential model calls and a
- * GitHub crawl do not fit: the invocation was killed part-way, the row was
- * left `running` behind a ten-minute lock, and the progress screen sat there
- * with nothing failing and nothing finishing. Each job now does one model call.
- */
-describe('analysis runs as two jobs', () => {
-  let ctx: TestContext;
-  let project: Project;
-
-  beforeEach(async () => {
-    ctx = await setupContext();
-    project = await createProject(ctx.scope, ctx.user.id);
-  });
-
-  afterEach(() => teardown());
-
-  async function run(type: string, payload: Record<string, unknown>) {
-    const { runJob } = await import('@/lib/jobs/runner');
-    const { enqueue } = await import('@/lib/db/repo');
-    const job = await enqueue(ctx.scope, type as never, payload, { projectId: project.id });
-    return runJob({ ...(await db().get(ctx.scope, 'jobs', job.id))!, attempts: 1 });
-  }
-
-  async function queuedTypes(): Promise<string[]> {
-    const jobs = await db().find(ctx.scope, 'jobs', { where: { project_id: project.id } });
-    return jobs.filter((j) => j.status === 'queued').map((j) => j.type);
-  }
-
-  it('does not identify the audience inside the analysis job', async () => {
-    const { analyzeProduct } = await import('@/lib/analysis/analyze');
-    const product = await analyzeProduct(ctx.scope, project, 'acme/taskflow', {
-      client: fakeGitHubClient(),
-    });
-
-    expect(product.analysis.one_liner.length).toBeGreaterThan(5);
-    const personas = await db().find(ctx.scope, 'personas', { where: { project_id: project.id } });
-    expect(personas).toEqual([]);
-  });
-
-  it('hands off to the audience job, which hands off to strategy', async () => {
-    setProvider(null);
-    const { enqueue } = await import('@/lib/db/repo');
-    const { runJob } = await import('@/lib/jobs/runner');
-
-    // The analysis job cannot reach GitHub here, so seed its output directly
-    // and drive the handoff that follows it.
-    const { analyzeProduct } = await import('@/lib/analysis/analyze');
-    await analyzeProduct(ctx.scope, project, 'acme/taskflow', { client: fakeGitHubClient() });
-
-    const audience = await enqueue(
-      ctx.scope,
-      'identify_audience',
-      { projectId: project.id },
-      { projectId: project.id },
-    );
-    const outcome = await runJob({
-      ...(await db().get(ctx.scope, 'jobs', audience.id))!,
-      attempts: 1,
-    });
-
-    expect(outcome.status).toBe('succeeded');
-    const personas = await db().find(ctx.scope, 'personas', { where: { project_id: project.id } });
-    expect(personas.length).toBeGreaterThan(0);
-    expect(await queuedTypes()).toContain('generate_strategy');
-  });
-
-  it('still reaches strategy when the audience step fails', async () => {
-    const { analyzeProduct } = await import('@/lib/analysis/analyze');
-    await analyzeProduct(ctx.scope, project, 'acme/taskflow', { client: fakeGitHubClient() });
-
-    setProvider(providerFailingOn('analysis.personas'));
-    const outcome = await run('identify_audience', { projectId: project.id });
-
-    // The job succeeds: a missing audience is a worse plan, not no plan.
-    expect(outcome.status).toBe('succeeded');
-    expect(await queuedTypes()).toContain('generate_strategy');
-
-    const errors = await db().find(ctx.scope, 'automation_errors', {
-      where: { project_id: project.id },
-    });
-    expect(errors.some((e) => e.scope === 'analysis.personas' && !e.fatal)).toBe(true);
   });
 });

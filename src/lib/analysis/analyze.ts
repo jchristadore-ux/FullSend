@@ -9,13 +9,13 @@
 import 'server-only';
 import { generateObject } from '../ai/client';
 import { systemScope, type TenantScope } from '../db';
-import { db, getAnalysis, getRepository, recordError } from '../db/repo';
+import { db, getAnalysis, getRepository } from '../db/repo';
 import { newId, nowIso } from '../ids';
 import { logger } from '../logger';
 import { GitHubClient, parseRepoInput } from '../github/client';
 import { ingestRepository, type RepoBundle } from '../github/ingest';
-import { personasSchema, productAnalysisSchema } from '../schemas';
-import type { Persona, ProductAnalysis, Project, Repository, Uuid } from '../types';
+import { productAnalysisSchema } from '../schemas';
+import type { ProductAnalysis, Project, Repository, Uuid } from '../types';
 
 const log = logger('analysis');
 
@@ -38,25 +38,12 @@ Rules that matter more than eloquence:
 
 Return JSON only.`;
 
-const PERSONA_SYSTEM = `You are FullSend's audience researcher.
-
-Given a verified product analysis, identify the two to four people who would
-actually use this. Be specific and unglamorous: real roles, real frustrations,
-real objections. Avoid demographic filler ("25-40, urban, tech-savvy").
-
-Every pain point must be one this product genuinely addresses.
-
-Return JSON only.`;
-
 export interface AnalyzeResult {
   repository: Repository;
   analysis: ProductAnalysis;
-  personas: Persona[];
   costUsd: number;
   /** Which stages actually ran. The rest were already done and were reused. */
-  ran: { ingest: boolean; analysis: boolean; personas: boolean };
-  /** Set when the audience step failed but the product analysis survived. */
-  personaError: string | null;
+  ran: { ingest: boolean; analysis: boolean };
 }
 
 export interface ProductResult {
@@ -64,13 +51,6 @@ export interface ProductResult {
   analysis: ProductAnalysis;
   costUsd: number;
   ran: { ingest: boolean; analysis: boolean };
-}
-
-export interface AudienceResult {
-  personas: Persona[];
-  costUsd: number;
-  ran: boolean;
-  error: string | null;
 }
 
 /**
@@ -122,53 +102,14 @@ export async function analyzeProduct(
 }
 
 /**
- * Step two: work out who it is for.
+ * The analysis stage, whole.
  *
- * Never throws. The audience is enrichment on top of an understanding that is
- * already saved, and losing it is not a reason to lose the understanding — or
- * the marketing plan, the content and the schedule that follow from it. A
- * failure is recorded where the founder can see it and the caller carries on;
- * because no personas were written, the next run retries this step alone.
- */
-export async function identifyAudience(
-  scope: TenantScope,
-  project: Project,
-  analysis: ProductAnalysis,
-  opts: { refresh?: boolean } = {},
-): Promise<AudienceResult> {
-  const existing = opts.refresh
-    ? []
-    : await db().find(scope, 'personas', { where: { project_id: project.id } });
-  if (existing.length) return { personas: existing, costUsd: 0, ran: false, error: null };
-
-  try {
-    const result = await runPersonas(scope, project, analysis);
-    return { personas: result.personas, costUsd: result.cost, ran: true, error: null };
-  } catch (e) {
-    const error = e instanceof Error ? e.message : String(e);
-    log.warn('audience step failed; keeping the product analysis', {
-      project: project.id,
-      error,
-    });
-    await recordError(scope, {
-      projectId: project.id,
-      scope: 'analysis.personas',
-      message: `Could not identify the audience: ${error}`,
-      remedy:
-        'The product analysis was kept and FullSend is carrying on without personas. ' +
-        'Run the analysis again to retry just this step.',
-      fatal: false,
-    });
-    return { personas: [], costUsd: 0, ran: false, error };
-  }
-}
-
-/**
- * Both steps back to back.
- *
- * The queue runs them as two jobs so neither can outlive its invocation; this
- * is for callers that are not the queue and can afford to wait — the e2e
- * chain, and a direct call from a script.
+ * There used to be a second half: a model call that named two to four personas
+ * before the marketing plan could be built. It is gone. The product analysis
+ * already carries the target market, the problem solved and the
+ * differentiators, so the personas mostly restated what was already known —
+ * while adding a stage that could fail and stop everything behind it. Plans are
+ * built from the analysis directly.
  */
 export async function analyzeRepository(
   scope: TenantScope,
@@ -177,15 +118,11 @@ export async function analyzeRepository(
   opts: { githubToken?: string; client?: GitHubClient; refresh?: boolean } = {},
 ): Promise<AnalyzeResult> {
   const product = await analyzeProduct(scope, project, repositoryInput, opts);
-  const audience = await identifyAudience(scope, project, product.analysis, opts);
-
   return {
     repository: product.repository,
     analysis: product.analysis,
-    personas: audience.personas,
-    costUsd: product.costUsd + audience.costUsd,
-    ran: { ...product.ran, personas: audience.ran },
-    personaError: audience.error,
+    costUsd: product.costUsd,
+    ran: product.ran,
   };
 }
 
@@ -291,56 +228,6 @@ async function runAnalysis(
   return { analysis, cost: costUsd };
 }
 
-async function runPersonas(
-  scope: TenantScope,
-  project: Project,
-  analysis: ProductAnalysis,
-): Promise<{ personas: Persona[]; cost: number }> {
-  const { data, costUsd } = await generateObject({
-    task: 'analysis.personas',
-    system: PERSONA_SYSTEM,
-    brief: `Who actually uses ${analysis.one_liner}?`,
-    context: {
-      analysis: {
-        one_liner: analysis.one_liner,
-        what_it_does: analysis.what_it_does,
-        category: analysis.category,
-        features: analysis.features,
-        target_market: analysis.target_market,
-        problem_solved: analysis.problem_solved,
-        differentiators: analysis.differentiators,
-      },
-    },
-    schema: personasSchema,
-    attribution: { scope, projectId: project.id, userId: project.user_id },
-  });
-
-  // Replace rather than accumulate: re-analysis should not duplicate personas.
-  const existing = await db().find(scope, 'personas', { where: { project_id: project.id } });
-  for (const p of existing) await db().remove(scope, 'personas', p.id);
-
-  const personas = await db().insertMany(
-    scope,
-    'personas',
-    data.personas.map((p, i) => ({
-      id: newId(),
-      project_id: project.id,
-      name: p.name,
-      role: p.role,
-      description: p.description,
-      pain_points: p.pain_points,
-      goals: p.goals,
-      objections: p.objections,
-      where_they_hang_out: p.where_they_hang_out.length ? p.where_they_hang_out : ['instagram' as const, 'tiktok' as const],
-      tone_preference: p.tone_preference,
-      priority: p.priority || i + 1,
-      created_at: nowIso(),
-    })),
-  );
-
-  return { personas, cost: costUsd };
-}
-
 /**
  * Screens FullSend can genuinely build demo content around, split by what is
  * actually available. Nothing here pretends a screenshot exists when it doesn't.
@@ -370,11 +257,9 @@ export function screenshotAvailability(analysis: ProductAnalysis): {
 export const ANALYSIS_STEPS = [
   'Reading repository',
   'Understanding product',
-  'Identifying audience',
-  'Finding differentiators',
-  'Building positioning',
-  'Creating content strategy',
-  'Planning first campaign',
+  'Building the marketing plan',
+  'Writing the content',
+  'Building the schedule',
 ] as const;
 
 export async function systemAnalyze(

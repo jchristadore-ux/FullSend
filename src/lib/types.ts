@@ -508,7 +508,6 @@ export type RecommendationAction =
 
 export type JobType =
   | 'analyze_repository'
-  | 'identify_audience'
   | 'generate_strategy'
   | 'generate_content'
   | 'generate_creative'

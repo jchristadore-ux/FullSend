@@ -313,7 +313,7 @@ describe('content generation', () => {
     const analyzed = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
       client: fakeGitHubClient(),
     });
-    const built = await buildStrategy(ctx.scope, project, analyzed.analysis, analyzed.personas);
+    const built = await buildStrategy(ctx.scope, project, analyzed.analysis);
     const strategy = await approveStrategy(ctx.scope, built.strategy.id);
     return { analyzed, built, strategy };
   }
@@ -332,7 +332,7 @@ describe('content generation', () => {
       analysis: analyzed.analysis,
       brand: built.brand,
       strategy,
-      personas: analyzed.personas,
+      personas: [],
       pillars: built.pillars,
       campaigns: built.campaigns,
       slots,
@@ -366,7 +366,7 @@ describe('content generation', () => {
       analysis: analyzed.analysis,
       brand: built.brand,
       strategy,
-      personas: analyzed.personas,
+      personas: [],
       pillars: built.pillars,
       campaigns: built.campaigns,
       slots,
@@ -390,7 +390,7 @@ describe('content generation', () => {
       analysis: analyzed.analysis,
       brand: built.brand,
       strategy,
-      personas: analyzed.personas,
+      personas: [],
       pillars: built.pillars,
       campaigns: built.campaigns,
     };

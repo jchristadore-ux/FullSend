@@ -149,8 +149,6 @@ describe('product understanding', () => {
       client: fakeGitHubClient(),
     });
 
-    expect(second.personas.length).toBe(first.personas.length);
-    const all = await ctx.store.find(ctx.scope, 'personas', { where: { project_id: project.id } });
-    expect(all.length).toBe(second.personas.length);
+    expect(second.analysis.id).toBe(first.analysis.id);
   });
 });
