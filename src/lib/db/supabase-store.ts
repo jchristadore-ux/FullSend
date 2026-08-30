@@ -329,6 +329,12 @@ export class SupabaseStore implements Store {
           locked_at: now,
           attempts: candidate.attempts + 1,
           updated_at: now,
+          // Reclaiming a job whose worker died is the only record that it
+          // died: the worker was killed before it could write anything.
+          last_error:
+            candidate.status === 'running'
+              ? 'The previous attempt was cut off before it finished.'
+              : candidate.last_error,
         })
         .eq('id', candidate.id)
         .eq('status', candidate.status)

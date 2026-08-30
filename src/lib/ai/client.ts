@@ -69,10 +69,17 @@ export function setProvider(p: AiProvider | null): void {
  * Which tier a task needs. Everything that is essentially formatting or
  * templating runs on the cheap model; only judgement-heavy work goes premium.
  */
+/*
+ * `strategy.build` was premium. The strategy schema is the largest single
+ * object FullSend asks for — positioning, cadence, platform strategy, growth,
+ * CTAs, the mix, up to eight pillars and eight campaigns — and the slowest
+ * model writing the longest answer is what pushed that one call past the
+ * invocation holding it. Standard answers the same schema inside the budget.
+ */
 const TASK_TIERS: Record<string, ModelTier> = {
   'analysis.product': 'standard',
   'analysis.personas': 'standard',
-  'strategy.build': 'premium',
+  'strategy.build': 'standard',
   'brand.profile': 'fast',
   'content.batch': 'standard',
   'content.single': 'fast',
@@ -159,9 +166,27 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
     }
   }
 
+  /*
+   * The repair turn is a second model call, and two of them do not fit in the
+   * invocation holding this one. Retrying anyway is how a recoverable
+   * validation failure became a killed function with nothing written down.
+   * Past this point the queue retries the job instead, which it can do with
+   * the whole budget rather than what is left of it.
+   */
+  const startedAt = Date.now();
+  const ROOM_FOR_A_SECOND_CALL_MS = 20_000;
+
   let response = await provider.complete(req);
   let parsed = tryParse(response.text, opts.schema, jsonSchema);
   let totalCost = response.costUsd;
+
+  if (!parsed.ok && Date.now() - startedAt > ROOM_FOR_A_SECOND_CALL_MS) {
+    throw new FullSendError('ai_invalid_output', `AI returned unusable output: ${parsed.error}`, {
+      retryable: true,
+      remedy: 'FullSend will retry this step automatically.',
+      meta: { task: opts.task, model: response.model, retriedInline: false },
+    });
+  }
 
   if (!parsed.ok) {
     log.warn('AI response failed validation, retrying once', {

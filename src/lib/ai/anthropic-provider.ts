@@ -13,8 +13,16 @@ import type { AiProvider, CompletionRequest, CompletionResponse, ModelTier } fro
  * against one unchanging brand + product context, so that prefix is written to
  * cache once and read back at a tenth of the price for every post after it.
  */
-/** Long enough for the biggest content batch, short enough to fail visibly. */
-const REQUEST_TIMEOUT_MS = 120_000;
+/**
+ * Shorter than the invocation that holds it.
+ *
+ * Two minutes was longer than the sixty seconds a serverless function gets, so
+ * the function was always killed before the request could time out. The job
+ * row was left claimed with no error on it — "cut off part-way and never
+ * reported back", with nothing after the colon, because there was nothing to
+ * report. A request that fails inside the job writes down why.
+ */
+const REQUEST_TIMEOUT_MS = 40_000;
 
 export class AnthropicProvider implements AiProvider {
   readonly name = 'anthropic';
@@ -41,7 +49,7 @@ export class AnthropicProvider implements AiProvider {
        */
       this.client = new Anthropic({
         apiKey: env.ai.anthropicKey,
-        maxRetries: 2,
+        maxRetries: 1,
         timeout: REQUEST_TIMEOUT_MS,
       });
     }
@@ -54,7 +62,12 @@ export class AnthropicProvider implements AiProvider {
 
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     const model = this.modelFor(req.tier);
-    const maxTokens = req.maxTokens ?? 8000;
+    /*
+     * Eight thousand tokens is close to a minute of writing on its own, which
+     * is the whole invocation. Nothing FullSend asks for needs that much: the
+     * largest schema here is the strategy, and it fits in well under half.
+     */
+    const maxTokens = req.maxTokens ?? 4000;
 
     // JSON is requested via the system prompt rather than a tool, so the
     // response stays a single text block and the cache prefix stays stable.
