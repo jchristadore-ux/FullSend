@@ -113,6 +113,15 @@ const handlers: Record<JobType, Handler> = {
   scan_trends: async (job) => { const scope = systemScope('job:scan_trends'); const projectId = String(job.payload.projectId); const analysis = await db().findOne(scope, 'product_analysis', { where: { project_id: projectId }, orderBy: 'created_at', direction: 'desc' }); if (!analysis) return { signals: 0, skipped: 'no analysis' }; const result = await scanTrends(scope, projectId, analysis); return { signals: result.signals.length, participatable: result.participatable.length }; },
 };
 
+/** Validate the shared secret used by Vercel Cron and other trusted workers. */
+export function cronSecretValid(value: string | null): boolean {
+  const secret = env.jobs.cronSecret;
+  if (!secret || !value) return false;
+  const normalized = value.trim();
+  if (normalized.startsWith('Bearer ')) return normalized.slice(7).trim() === secret;
+  return normalized === secret;
+}
+
 export function backoffSeconds(attempt: number): number { return Math.min(3600, 60 * 2 ** (attempt - 1)); }
 
 export async function runJob(job: Job): Promise<{ status: 'succeeded' | 'failed' | 'dead' }> {
