@@ -8,7 +8,7 @@ import { systemScope, type TenantScope } from '../db';
 import type { Uuid } from '../types';
 import { cacheKey, isCacheable, readCache, writeCache } from './cache';
 import { coerceToSchema } from './coerce';
-import { jsonSchemaFor } from './json-schema';
+import { anthropicJsonSchemaFor, jsonSchemaFor } from './json-schema';
 import { DeterministicProvider } from './deterministic-provider';
 import { AnthropicProvider } from './anthropic-provider';
 import { OpenAiProvider } from './openai-provider';
@@ -48,42 +48,41 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
   const tier = opts.tier ?? tierFor(opts.task);
   const model = provider.modelFor(tier);
   await assertWithinBudget(opts.attribution?.projectId ?? null);
-  const jsonSchema = opts.jsonSchema ?? jsonSchemaFor(opts.schema) ?? undefined;
+
+  // Keep the full schema for coercion. Only the provider gets the reduced
+  // Anthropic dialect, so min/max/default information is never lost locally.
+  const validationSchema = opts.jsonSchema ?? jsonSchemaFor(opts.schema) ?? undefined;
+  const providerSchema = opts.jsonSchema ?? (provider.name === 'anthropic' ? anthropicJsonSchemaFor(opts.schema) : validationSchema);
   const req: CompletionRequest = {
     task: opts.task, tier, system: opts.system,
     messages: [{ role: 'user', content: JSON.stringify({ brief: opts.brief, context: opts.context }, null, 2) }],
-    maxTokens: opts.maxTokens, jsonSchema, noCache: opts.noCache,
+    maxTokens: opts.maxTokens, jsonSchema: providerSchema, noCache: opts.noCache,
   };
   const key = cacheKey(req, model);
   if (isCacheable(req)) {
     const hit = readCache(key);
     if (hit) {
-      const parsed = tryParse(hit.text, opts.schema, jsonSchema);
+      const parsed = tryParse(hit.text, opts.schema, validationSchema);
       if (parsed.ok) { await ledger(opts, hit, tier); return { data: parsed.value, costUsd: 0, model: hit.model, cacheHit: true }; }
     }
   }
 
   const maxTokens = opts.maxTokens ?? (opts.task === 'strategy.build' ? 2400 : 4000);
   const response = await provider.complete({ ...req, maxTokens });
-  let parsed = tryParse(response.text, opts.schema, jsonSchema);
+  let parsed = tryParse(response.text, opts.schema, validationSchema);
   let totalCost = response.costUsd;
 
   if (!parsed.ok) {
-    log.warn('AI response failed validation, attempting one repair', {
-      task: opts.task,
-      issue: parsed.error,
-      responseChars: response.text.length,
-    });
+    log.warn('AI response failed validation, attempting one repair', { task: opts.task, issue: parsed.error, responseChars: response.text.length });
     const retry: CompletionRequest = {
       ...req, maxTokens, noCache: true,
       messages: correctionMessages(req.messages, response.text, parsed.error),
     };
     const repaired = await provider.complete(retry);
     totalCost += repaired.costUsd;
-    parsed = tryParse(repaired.text, opts.schema, jsonSchema);
+    parsed = tryParse(repaired.text, opts.schema, validationSchema);
     if (!parsed.ok) throw new FullSendError('ai_invalid_output', `AI returned unusable output: ${parsed.error}`, {
-      retryable: true, remedy: 'FullSend will retry this step automatically.',
-      meta: { task: opts.task, model: repaired.model },
+      retryable: true, remedy: 'FullSend will retry this step automatically.', meta: { task: opts.task, model: repaired.model },
     });
     if (isCacheable(req)) writeCache(key, repaired);
     await ledger(opts, { ...repaired, costUsd: totalCost }, tier);
@@ -103,12 +102,12 @@ function correctionMessages(messages: AiMessage[], text: string, error: string):
   return [...messages.slice(0, -1), { role: 'user', content: `${last.content}\n\nYour previous attempt returned nothing. ${instruction}` }];
 }
 
-function tryParse<T>(text: string, schema: z.ZodType<T>, jsonSchema?: Record<string, unknown>): { ok: true; value: T } | { ok: false; error: string } {
+function tryParse<T>(text: string, schema: z.ZodType<T>, validationSchema?: Record<string, unknown>): { ok: true; value: T } | { ok: false; error: string } {
   const json = extractJson(text);
   if (json === null) return { ok: false, error: 'no JSON object found in the response' };
   let raw: unknown;
   try { raw = JSON.parse(json); } catch (e) { return { ok: false, error: `invalid JSON (${(e as Error).message})` }; }
-  const result = schema.safeParse(coerceToSchema(raw, jsonSchema));
+  const result = schema.safeParse(coerceToSchema(raw, validationSchema));
   if (!result.success) return { ok: false, error: result.error.issues.slice(0, 8).map(i => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ') };
   return { ok: true, value: result.data };
 }
