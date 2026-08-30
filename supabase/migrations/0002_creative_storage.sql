@@ -6,15 +6,20 @@ insert into storage.buckets (id, name, public)
 values ('fullsend-creative', 'fullsend-creative', true)
 on conflict (id) do update set public = true;
 
-create policy if not exists fullsend_creative_public_read
+drop policy if exists fullsend_creative_public_read on storage.objects;
+create policy fullsend_creative_public_read
 on storage.objects for select
 using (bucket_id = 'fullsend-creative');
 
-create policy if not exists fullsend_creative_service_insert
+drop policy if exists fullsend_creative_service_insert on storage.objects;
+create policy fullsend_creative_service_insert
 on storage.objects for insert
+to service_role
 with check (bucket_id = 'fullsend-creative');
 
-create policy if not exists fullsend_creative_service_update
+drop policy if exists fullsend_creative_service_update on storage.objects;
+create policy fullsend_creative_service_update
 on storage.objects for update
+to service_role
 using (bucket_id = 'fullsend-creative')
 with check (bucket_id = 'fullsend-creative');
