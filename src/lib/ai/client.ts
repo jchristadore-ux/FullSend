@@ -16,6 +16,8 @@ import type { AiMessage, AiProvider, CompletionRequest, CompletionResponse, Mode
 
 const log = logger('ai');
 let cached: AiProvider | null = null;
+const GENERATION_BUDGET_MS = 50_000;
+const REPAIR_RESERVE_MS = 10_000;
 
 export function getProvider(): AiProvider {
   if (cached) return cached;
@@ -44,13 +46,11 @@ export interface GenerateOptions<T> {
 export interface GenerateResult<T> { data: T; costUsd: number; model: string; cacheHit: boolean; }
 
 export async function generateObject<T>(opts: GenerateOptions<T>): Promise<GenerateResult<T>> {
+  const startedAt = Date.now();
   const provider = getProvider();
   const tier = opts.tier ?? tierFor(opts.task);
   const model = provider.modelFor(tier);
   await assertWithinBudget(opts.attribution?.projectId ?? null);
-
-  // Keep the full schema for coercion. Only the provider gets the reduced
-  // Anthropic dialect, so min/max/default information is never lost locally.
   const validationSchema = opts.jsonSchema ?? jsonSchemaFor(opts.schema) ?? undefined;
   const providerSchema = opts.jsonSchema ?? (provider.name === 'anthropic' ? anthropicJsonSchemaFor(opts.schema) : validationSchema);
   const req: CompletionRequest = {
@@ -73,6 +73,15 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
   let totalCost = response.costUsd;
 
   if (!parsed.ok) {
+    // A repair call can take almost as long as the first model call. Never
+    // start one when the surrounding serverless invocation no longer has a
+    // safe amount of time left to finish and persist the job result.
+    const elapsed = Date.now() - startedAt;
+    if (elapsed + REPAIR_RESERVE_MS >= GENERATION_BUDGET_MS) {
+      throw new FullSendError('ai_invalid_output', `AI returned unusable output: ${parsed.error}`, {
+        retryable: true, remedy: 'FullSend will retry this step automatically.', meta: { task: opts.task, model },
+      });
+    }
     log.warn('AI response failed validation, attempting one repair', { task: opts.task, issue: parsed.error, responseChars: response.text.length });
     const retry: CompletionRequest = {
       ...req, maxTokens, noCache: true,
