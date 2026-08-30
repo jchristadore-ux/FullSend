@@ -14,12 +14,8 @@ function strictify(value: unknown): unknown {
     if (key === '$schema') continue;
     out[key] = strictify(child);
   }
-  if (out.type === 'object') {
-    const props = out.properties;
-    if (props && typeof props === 'object' && !Array.isArray(props)) {
-      out.additionalProperties = false;
-    }
-  }
+  const isObject = out.type === 'object' || (Array.isArray(out.type) && out.type.includes('object'));
+  if (isObject) out.additionalProperties = false;
   return out;
 }
 
