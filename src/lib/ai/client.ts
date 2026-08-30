@@ -31,9 +31,6 @@ export function setProvider(p: AiProvider | null): void { cached = p; }
 const TASK_TIERS: Record<string, ModelTier> = {
   'analysis.product': 'standard',
   'analysis.personas': 'standard',
-  // Strategy is the longest structured response in the onboarding pipeline.
-  // Keep it on the fast tier so one serverless invocation can finish it and
-  // persist the checkpoint instead of being killed at the platform timeout.
   'strategy.build': 'fast',
   'brand.profile': 'fast',
   'content.batch': 'standard',
@@ -76,33 +73,43 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
     }
   }
 
-  // Keep structured onboarding generations comfortably below Vercel's 60s
-  // function ceiling. The queue will retry the whole job if the provider fails.
-  const startedAt = Date.now();
-  const ROOM_FOR_A_SECOND_CALL_MS = 8_000;
   const maxTokens = opts.maxTokens ?? (opts.task === 'strategy.build' ? 2400 : 4000);
   const response = await provider.complete({ ...req, maxTokens });
   let parsed = tryParse(response.text, opts.schema, jsonSchema);
   let totalCost = response.costUsd;
 
-  // A second AI call here is unsafe for a 60s serverless invocation. If the
-  // first response is malformed late in the request, persist the failure and
-  // let the durable queue retry it instead.
-  if (!parsed.ok && Date.now() - startedAt >= ROOM_FOR_A_SECOND_CALL_MS) {
-    throw new FullSendError('ai_invalid_output', `AI returned unusable output: ${parsed.error}`, {
-      retryable: true, remedy: 'FullSend will retry this step automatically.',
-      meta: { task: opts.task, model: response.model, retriedInline: false },
-    });
-  }
+  // AI output is an external boundary and can occasionally be malformed even
+  // when the provider request itself succeeds. This endpoint now runs as
+  // durable background work, so a single repair attempt is safe and preferable
+  // to turning a recoverable formatting error into a failed onboarding stage.
   if (!parsed.ok) {
-    log.warn('AI response failed validation, retrying once', { task: opts.task, issue: parsed.error });
-    const retry: CompletionRequest = { ...req, maxTokens, noCache: true, messages: correctionMessages(req.messages, response.text, parsed.error) };
+    log.warn('AI response failed validation, attempting one repair', {
+      task: opts.task,
+      issue: parsed.error,
+      responseChars: response.text.length,
+      stopReason: response.stopReason,
+    });
+    const retry: CompletionRequest = {
+      ...req,
+      maxTokens,
+      noCache: true,
+      messages: correctionMessages(req.messages, response.text, parsed.error),
+    };
     const repaired = await provider.complete(retry);
     totalCost += repaired.costUsd;
     parsed = tryParse(repaired.text, opts.schema, jsonSchema);
-    if (!parsed.ok) throw new FullSendError('ai_invalid_output', `AI returned unusable output: ${parsed.error}`, {
-      retryable: true, remedy: 'FullSend will retry this step automatically.', meta: { task: opts.task, model: repaired.model },
-    });
+    if (!parsed.ok) {
+      throw new FullSendError('ai_invalid_output', `AI returned unusable output: ${parsed.error}`, {
+        retryable: true,
+        remedy: 'FullSend will retry this step automatically.',
+        meta: {
+          task: opts.task,
+          model: repaired.model,
+          firstResponseChars: response.text.length,
+          repairedResponseChars: repaired.text.length,
+        },
+      });
+    }
     if (isCacheable(req)) writeCache(key, repaired);
     await ledger(opts, { ...repaired, costUsd: totalCost }, tier);
     return { data: parsed.value, costUsd: totalCost, model: repaired.model, cacheHit: false };
@@ -114,7 +121,7 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
 
 function correctionMessages(messages: AiMessage[], text: string, error: string): AiMessage[] {
   const instruction = `That response did not validate: ${error}\nReturn only the corrected JSON object. No prose, no code fences.`;
-  const echo = text.slice(0, 4000).trim();
+  const echo = text.slice(0, 6000).trim();
   if (echo) return [...messages, { role: 'assistant', content: echo }, { role: 'user', content: instruction }];
   const last = messages[messages.length - 1];
   if (!last || last.role !== 'user') return [...messages, { role: 'user', content: instruction }];
