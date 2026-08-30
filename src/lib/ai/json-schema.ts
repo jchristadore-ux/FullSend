@@ -1,4 +1,4 @@
-/** Convert a Zod schema into the strict JSON Schema required by Anthropic. */
+/** Convert a Zod schema into the strict JSON Schema accepted by Anthropic structured output. */
 import { z } from 'zod';
 import { logger } from '../logger';
 
@@ -11,7 +11,8 @@ function strictify(value: unknown): unknown {
   const obj = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(obj)) {
-    if (key === '$schema') continue;
+    // Anthropic's schema dialect rejects these JSON Schema keywords.
+    if (key === '$schema' || key === 'maxItems' || key === 'minItems') continue;
     out[key] = strictify(child);
   }
   const isObject = out.type === 'object' || (Array.isArray(out.type) && out.type.includes('object'));
