@@ -8,6 +8,11 @@ import type { AiProvider, CompletionRequest, CompletionResponse, ModelTier } fro
 
 const REQUEST_TIMEOUT_MS = 40_000;
 
+type StructuredAnthropicRequest = Anthropic.MessageCreateParams & {
+  output_config?: { format: { type: 'json_schema'; schema: Record<string, unknown> } };
+  thinking?: { type: 'disabled' };
+};
+
 export class AnthropicProvider implements AiProvider {
   readonly name = 'anthropic';
   readonly live: boolean;
@@ -38,16 +43,15 @@ export class AnthropicProvider implements AiProvider {
     const maxTokens = req.maxTokens ?? 4000;
     const system: Anthropic.TextBlockParam[] = [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }];
 
-    const request: Anthropic.MessageCreateParams = {
+    const request: StructuredAnthropicRequest = {
       model,
       max_tokens: maxTokens,
       system,
       messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
     };
 
-    // Machine-readable stages must use Anthropic's native structured-output
-    // contract. Prompting for JSON alone is not reliable enough for a durable
-    // pipeline and was the source of the repeated "no JSON object" failures.
+    // Machine-readable stages use Anthropic's native structured-output contract.
+    // Prompting for JSON alone is not reliable enough for a durable pipeline.
     if (req.jsonSchema) {
       request.output_config = {
         format: {
