@@ -6,7 +6,6 @@ import { isBillingFailure, providerMessage } from './provider-errors';
 import { ANTHROPIC_MODELS, estimateCost } from './pricing';
 import type { AiProvider, CompletionRequest, CompletionResponse, ModelTier } from './types';
 
-/** Anthropic adapter. */
 const REQUEST_TIMEOUT_MS = 40_000;
 
 export class AnthropicProvider implements AiProvider {
@@ -38,12 +37,31 @@ export class AnthropicProvider implements AiProvider {
     const model = this.modelFor(req.tier);
     const maxTokens = req.maxTokens ?? 4000;
     const system: Anthropic.TextBlockParam[] = [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }];
+
+    const request: Anthropic.MessageCreateParams = {
+      model,
+      max_tokens: maxTokens,
+      system,
+      messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
+    };
+
+    // Machine-readable stages must use Anthropic's native structured-output
+    // contract. Prompting for JSON alone is not reliable enough for a durable
+    // pipeline and was the source of the repeated "no JSON object" failures.
     if (req.jsonSchema) {
-      system.push({ type: 'text', text: 'Respond with a single JSON object and nothing else — no prose, no markdown fences. It must match this JSON Schema:\n' + JSON.stringify(req.jsonSchema) });
+      request.output_config = {
+        format: {
+          type: 'json_schema',
+          schema: req.jsonSchema,
+        },
+      };
+      // Keep the output budget for the actual JSON rather than hidden reasoning.
+      request.thinking = { type: 'disabled' };
     }
+
     let response: Anthropic.Message;
     try {
-      response = await this.sdk().messages.create({ model, max_tokens: maxTokens, system, messages: req.messages.map((m) => ({ role: m.role, content: m.content })) });
+      response = await this.sdk().messages.create(request);
     } catch (e) { throw this.wrap(e, model); }
     if (response.stop_reason === 'refusal') throw new FullSendError('ai_refusal', 'The model declined this generation request', { remedy: 'Edit the campaign angle and retry.', meta: { task: req.task } });
     const text = response.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map((b) => b.text).join('').trim();
