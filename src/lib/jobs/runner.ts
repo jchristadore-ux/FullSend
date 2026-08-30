@@ -378,7 +378,7 @@ export async function drainQueue(
    * starting at forty-four seconds of a forty-five second budget was
    * guaranteed to die that way. Nothing is claimed without room to run it.
    */
-  const ROOM_TO_RUN_MS = 45_000;
+  const ROOM_TO_RUN_MS = 40_000;
 
   let processed = 0;
   let succeeded = 0;
