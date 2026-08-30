@@ -10,8 +10,14 @@ function strictify(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value;
   const obj = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
+  // Anthropic's structured-output dialect is intentionally narrower than
+  // general JSON Schema. Keep only structural keywords that it supports.
+  const allowed = new Set([
+    'type', 'properties', 'required', 'additionalProperties', 'items',
+    'enum', 'const', 'anyOf', 'oneOf', 'allOf', '$ref', '$defs', 'description',
+  ]);
   for (const [key, child] of Object.entries(obj)) {
-    if (key === '$schema' || key === 'maxItems' || key === 'minItems' || key === 'maximum' || key === 'minimum' || key === 'exclusiveMaximum' || key === 'exclusiveMinimum' || key === 'multipleOf' || key === 'minLength' || key === 'maxLength' || key === 'pattern') continue;
+    if (!allowed.has(key)) continue;
     out[key] = strictify(child);
   }
   const isObject = out.type === 'object' || (Array.isArray(out.type) && out.type.includes('object'));
