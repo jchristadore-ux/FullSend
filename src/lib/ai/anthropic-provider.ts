@@ -7,10 +7,6 @@ import { ANTHROPIC_MODELS, estimateCost } from './pricing';
 import type { AiProvider, CompletionRequest, CompletionResponse, ModelTier } from './types';
 
 const REQUEST_TIMEOUT_MS = 40_000;
-type StructuredAnthropicRequest = Anthropic.MessageCreateParams & {
-  output_config?: { format: { type: 'json_schema'; schema: Record<string, unknown> } };
-  thinking?: { type: 'disabled' };
-};
 
 export class AnthropicProvider implements AiProvider {
   readonly name = 'anthropic'; readonly live: boolean; private client: Anthropic | null = null;
@@ -25,9 +21,24 @@ export class AnthropicProvider implements AiProvider {
   modelFor(tier: ModelTier): string { return ANTHROPIC_MODELS[tier]; }
   async complete(req: CompletionRequest): Promise<CompletionResponse> {
     const model = this.modelFor(req.tier); const maxTokens = req.maxTokens ?? 4000;
-    const system: Anthropic.TextBlockParam[] = [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }];
-    const request: StructuredAnthropicRequest = { model, max_tokens: maxTokens, system, messages: req.messages.map((m) => ({ role: m.role, content: m.content })) };
-    if (req.jsonSchema) { request.output_config = { format: { type: 'json_schema', schema: req.jsonSchema } }; request.thinking = { type: 'disabled' }; }
+
+    // Do not use Anthropic's output_config schema dialect here. The provider's
+    // structured-output validator is intentionally narrower than JSON Schema
+    // generated from Zod and has repeatedly rejected valid schemas containing
+    // keywords such as minimum, maximum, maxItems and optional object fields.
+    // FullSend already validates and repairs the response locally. Keeping the
+    // schema out of output_config makes the vendor boundary stable while the
+    // application retains strict Zod validation and durable job retries.
+    const schemaInstruction = req.jsonSchema
+      ? `\n\nReturn exactly one JSON value matching this shape. Do not add prose or markdown fences:\n${JSON.stringify(req.jsonSchema)}`
+      : '';
+    const system: Anthropic.TextBlockParam[] = [{ type: 'text', text: `${req.system}${schemaInstruction}`, cache_control: { type: 'ephemeral' } }];
+    const request: Anthropic.MessageCreateParams = {
+      model,
+      max_tokens: maxTokens,
+      system,
+      messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
+    };
     let response: Anthropic.Message;
     try { response = await this.sdk().messages.create(request); } catch (e) { throw this.wrap(e, model); }
     if (response.stop_reason === 'refusal') throw new FullSendError('ai_refusal', 'The model declined this generation request', { remedy: 'Edit the campaign angle and retry.', meta: { task: req.task } });
