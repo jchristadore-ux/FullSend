@@ -44,6 +44,12 @@ function strictifyForAnthropic(value: unknown): unknown {
   }
   if (out.type === 'object' || (Array.isArray(out.type) && out.type.includes('object'))) {
     out.additionalProperties = false;
+    const properties = out.properties;
+    if (properties && typeof properties === 'object' && !Array.isArray(properties)) {
+      // Constrained structured output is most reliable when every declared
+      // field is emitted. Zod defaults then provide the same semantics locally.
+      out.required = Object.keys(properties as Record<string, unknown>);
+    }
   }
   return out;
 }
