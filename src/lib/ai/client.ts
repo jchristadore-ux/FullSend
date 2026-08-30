@@ -29,18 +29,9 @@ export function getProvider(): AiProvider {
 export function setProvider(p: AiProvider | null): void { cached = p; }
 
 const TASK_TIERS: Record<string, ModelTier> = {
-  'analysis.product': 'standard',
-  'analysis.personas': 'standard',
-  'strategy.build': 'fast',
-  'brand.profile': 'fast',
-  'content.batch': 'standard',
-  'content.single': 'fast',
-  'content.rewrite': 'fast',
-  'qc.judgement': 'fast',
-  'optimizer.recommendations': 'premium',
-  'report.weekly': 'standard',
-  'trends.scan': 'fast',
-  'video.plan': 'standard',
+  'analysis.product': 'standard', 'analysis.personas': 'standard', 'strategy.build': 'fast', 'brand.profile': 'fast',
+  'content.batch': 'standard', 'content.single': 'fast', 'content.rewrite': 'fast', 'qc.judgement': 'fast',
+  'optimizer.recommendations': 'premium', 'report.weekly': 'standard', 'trends.scan': 'fast', 'video.plan': 'standard',
 };
 export function tierFor(task: string): ModelTier { return TASK_TIERS[task] ?? 'fast'; }
 
@@ -61,8 +52,7 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
   const req: CompletionRequest = {
     task: opts.task, tier, system: opts.system,
     messages: [{ role: 'user', content: JSON.stringify({ brief: opts.brief, context: opts.context }, null, 2) }],
-    maxTokens: opts.maxTokens,
-    jsonSchema, noCache: opts.noCache,
+    maxTokens: opts.maxTokens, jsonSchema, noCache: opts.noCache,
   };
   const key = cacheKey(req, model);
   if (isCacheable(req)) {
@@ -78,38 +68,23 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
   let parsed = tryParse(response.text, opts.schema, jsonSchema);
   let totalCost = response.costUsd;
 
-  // AI output is an external boundary and can occasionally be malformed even
-  // when the provider request itself succeeds. This endpoint now runs as
-  // durable background work, so a single repair attempt is safe and preferable
-  // to turning a recoverable formatting error into a failed onboarding stage.
   if (!parsed.ok) {
     log.warn('AI response failed validation, attempting one repair', {
       task: opts.task,
       issue: parsed.error,
       responseChars: response.text.length,
-      stopReason: response.stopReason,
     });
     const retry: CompletionRequest = {
-      ...req,
-      maxTokens,
-      noCache: true,
+      ...req, maxTokens, noCache: true,
       messages: correctionMessages(req.messages, response.text, parsed.error),
     };
     const repaired = await provider.complete(retry);
     totalCost += repaired.costUsd;
     parsed = tryParse(repaired.text, opts.schema, jsonSchema);
-    if (!parsed.ok) {
-      throw new FullSendError('ai_invalid_output', `AI returned unusable output: ${parsed.error}`, {
-        retryable: true,
-        remedy: 'FullSend will retry this step automatically.',
-        meta: {
-          task: opts.task,
-          model: repaired.model,
-          firstResponseChars: response.text.length,
-          repairedResponseChars: repaired.text.length,
-        },
-      });
-    }
+    if (!parsed.ok) throw new FullSendError('ai_invalid_output', `AI returned unusable output: ${parsed.error}`, {
+      retryable: true, remedy: 'FullSend will retry this step automatically.',
+      meta: { task: opts.task, model: repaired.model },
+    });
     if (isCacheable(req)) writeCache(key, repaired);
     await ledger(opts, { ...repaired, costUsd: totalCost }, tier);
     return { data: parsed.value, costUsd: totalCost, model: repaired.model, cacheHit: false };
@@ -121,7 +96,7 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
 
 function correctionMessages(messages: AiMessage[], text: string, error: string): AiMessage[] {
   const instruction = `That response did not validate: ${error}\nReturn only the corrected JSON object. No prose, no code fences.`;
-  const echo = text.slice(0, 6000).trim();
+  const echo = text.slice(0, 4000).trim();
   if (echo) return [...messages, { role: 'assistant', content: echo }, { role: 'user', content: instruction }];
   const last = messages[messages.length - 1];
   if (!last || last.role !== 'user') return [...messages, { role: 'user', content: instruction }];
