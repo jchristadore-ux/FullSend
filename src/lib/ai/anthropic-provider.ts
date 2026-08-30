@@ -7,7 +7,7 @@ import { ANTHROPIC_MODELS, estimateCost } from './pricing';
 import type { AiProvider, CompletionRequest, CompletionResponse, ModelTier } from './types';
 
 /** Anthropic adapter. */
-const REQUEST_TIMEOUT_MS = 25_000;
+const REQUEST_TIMEOUT_MS = 50_000;
 
 export class AnthropicProvider implements AiProvider {
   readonly name = 'anthropic';
