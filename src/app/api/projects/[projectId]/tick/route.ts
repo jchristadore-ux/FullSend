@@ -20,5 +20,9 @@ export const POST = projectRoute(async ({ project }) => {
    * actually waiting on was never reached. The page nudges its own work;
    * cron still drains everything.
    */
-  return drainQueue({ max: 4, budgetMs: 45_000, projectId: project.id });
+  // Leave a small amount of invocation headroom while still giving one AI job
+  // enough time to finish. A 45s budget combined with the runner's safety
+  // window previously made the loop's condition false immediately, so the
+  // onboarding nudge processed ZERO jobs every time.
+  return drainQueue({ max: 2, budgetMs: 55_000, projectId: project.id });
 });
