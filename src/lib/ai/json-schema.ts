@@ -11,8 +11,7 @@ function strictify(value: unknown): unknown {
   const obj = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(obj)) {
-    // Anthropic's schema dialect rejects these JSON Schema keywords.
-    if (key === '$schema' || key === 'maxItems' || key === 'minItems') continue;
+    if (key === '$schema' || key === 'maxItems' || key === 'minItems' || key === 'maximum' || key === 'minimum' || key === 'exclusiveMaximum' || key === 'exclusiveMinimum' || key === 'multipleOf' || key === 'minLength' || key === 'maxLength' || key === 'pattern') continue;
     out[key] = strictify(child);
   }
   const isObject = out.type === 'object' || (Array.isArray(out.type) && out.type.includes('object'));
