@@ -29,17 +29,6 @@ import type { Job, JobType } from '../types';
 
 const log = logger('jobs');
 
-/**
- * A running job older than this is assumed to have died with its worker.
- *
- * Ten minutes was the old value, and it was the length of the stall: the
- * workers here are serverless invocations that are killed at sixty seconds, so
- * a job that outgrew its invocation left a `running` row that nothing would
- * reclaim for ten minutes — no error, no progress, nothing for the founder to
- * do but watch. Three minutes is comfortably longer than any invocation can
- * live and short enough that a death is recovered from while someone is still
- * looking at the screen.
- */
 const LOCK_TIMEOUT_MS = 3 * 60 * 1000;
 
 type Handler = (job: Job) => Promise<Record<string, unknown>>;
@@ -64,10 +53,6 @@ const handlers: Record<JobType, Handler> = {
         status: 'analyzed',
         updated_at: nowIso(),
       });
-      // Straight to the marketing plan. There is no audience step: the product
-      // analysis already carries the target market, the problem solved and the
-      // differentiators, so a separate model call to restate them was a stage
-      // that could fail without ever adding anything the plan did not have.
       await enqueueOnce(scope, 'generate_strategy', { projectId, refresh }, { projectId });
       return {
         analysisId: result.analysis.id,
@@ -76,12 +61,6 @@ const handlers: Record<JobType, Handler> = {
         reused: !result.ran.analysis,
       };
     } catch (e) {
-      /*
-       * A retry resumes from here, so the status must say what actually
-       * survived. Marking the project `failed` outright discarded a completed
-       * product analysis in the founder's eyes and sent the next run back to
-       * the beginning; `analyzed` is the truth when the analysis is on disk.
-       */
       const kept = await getAnalysis(scope, projectId).catch(() => null);
       await db().update(scope, 'projects', projectId, { status: kept ? 'analyzed' : 'failed' });
       throw e;
@@ -110,12 +89,6 @@ const handlers: Record<JobType, Handler> = {
       updated_at: nowIso(),
     });
 
-    /*
-     * Full Send means the machine acts. The plan was being saved and then left
-     * sitting unapproved, which `generationBlocker` reads as a reason not to
-     * write anything — so the pipeline reached step two and stopped, with a
-     * finished strategy and an empty calendar.
-     */
     if (project.autopilot_mode === 'full_send' && !result.strategy.approved) {
       await db().update(scope, 'marketing_strategies', result.strategy.id, {
         approved: true,
@@ -123,7 +96,6 @@ const handlers: Record<JobType, Handler> = {
       });
     }
 
-    // The brand profile is the second model call of the plan, and its own job.
     await enqueueOnce(scope, 'generate_brand', { projectId }, { projectId });
 
     return {
@@ -154,7 +126,6 @@ const handlers: Record<JobType, Handler> = {
       refresh: Boolean(job.payload.refresh),
     });
 
-    // Step three follows step two.
     await enqueueOnce(scope, 'generate_content', { projectId }, { projectId });
     return { brandId: brand.id, costUsd, reused: costUsd === 0 };
   },
@@ -185,7 +156,6 @@ const handlers: Record<JobType, Handler> = {
   },
 
   generate_creative: async (job) => {
-    // Creative is produced inline with content; this exists for re-renders.
     const scope = systemScope('job:generate_creative');
     const contentId = String(job.payload.contentItemId);
     const item = await db().get(scope, 'content_items', contentId);
@@ -218,7 +188,6 @@ const handlers: Record<JobType, Handler> = {
   publish_post: async (job) => {
     const scope = systemScope('job:publish_post');
     const outcome = await publishScheduledPost(scope, String(job.payload.scheduledPostId));
-    // A retrying publish is not a job failure — the post row carries the state.
     return { status: outcome.status, error: outcome.error ?? null };
   },
 
@@ -277,11 +246,9 @@ const handlers: Record<JobType, Handler> = {
 };
 
 export function backoffSeconds(attempt: number): number {
-  // 1m, 2m, 4m, 8m, 16m — capped at an hour.
   return Math.min(3600, 60 * 2 ** (attempt - 1));
 }
 
-/** Runs one claimed job to completion. Never throws — outcomes are recorded. */
 export async function runJob(job: Job): Promise<{ status: 'succeeded' | 'failed' | 'dead' }> {
   const scope = systemScope('job runner');
   const started = Date.now();
@@ -332,20 +299,6 @@ export async function runJob(job: Job): Promise<{ status: 'succeeded' | 'failed'
       updated_at: nowIso(),
     });
 
-    /*
-     * Record it now, not only when the retries run out.
-     *
-     * This used to be written on death alone, so a job failing its way through
-     * five attempts produced nothing anywhere the founder could see: the row
-     * reads `queued`, the Send Center only listed fatal errors, and the
-     * Control Room was a separate page. With the queue draining every few
-     * minutes at best, reaching the fifth attempt takes hours — hours during
-     * which an expired key or an empty credit balance is completely invisible
-     * and pressing the button again is the only available move.
-     *
-     * `fatal` stays false while there are attempts left, so it still reads as
-     * "retrying" rather than "given up".
-     */
     await recordError(scope, {
       projectId: job.project_id,
       scope: `job:${job.type}`,
@@ -373,12 +326,12 @@ export async function drainQueue(
   const deadline = Date.now() + budgetMs;
 
   /*
-   * A job claimed with seconds left is a job that will be killed holding its
-   * claim. The loop only checked that the deadline had not passed, so one
-   * starting at forty-four seconds of a forty-five second budget was
-   * guaranteed to die that way. Nothing is claimed without room to run it.
+   * A user-facing tick is allowed to claim a job only when there is enough
+   * time left for the provider's 25s request timeout plus database overhead.
+   * The previous 40s safety window with a 55s budget meant the tick had only
+   * 15s of usable time, so Marketing Plan could never be claimed at all.
    */
-  const ROOM_TO_RUN_MS = 40_000;
+  const ROOM_TO_RUN_MS = 25_000;
 
   let processed = 0;
   let succeeded = 0;
@@ -398,7 +351,6 @@ export async function drainQueue(
   return { processed, succeeded, failed, dead };
 }
 
-/** Queue health, for the Control Room. */
 export async function queueStats(): Promise<{
   queued: number;
   running: number;
@@ -417,13 +369,4 @@ export async function queueStats(): Promise<{
     if (j.status === 'queued' && !oldestQueuedAt) oldestQueuedAt = j.run_after;
   }
   return { ...counts, oldestQueuedAt };
-}
-
-export function cronSecretValid(header: string | null): boolean {
-  const expected = env.jobs.cronSecret;
-  // With no secret set, cron endpoints are refused rather than left open.
-  if (!expected) return false;
-  if (!header) return false;
-  const token = header.startsWith('Bearer ') ? header.slice(7) : header;
-  return token === expected;
 }
