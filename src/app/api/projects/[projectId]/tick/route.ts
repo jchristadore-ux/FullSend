@@ -14,15 +14,10 @@ export const maxDuration = 60;
  */
 export const POST = projectRoute(async ({ project }) => {
   /*
-   * Scoped to this project. The queue is global, so a founder watching their
-   * own analysis was spending every tick running other projects' jobs — and
-   * with a backlog of dead ones from earlier attempts, the job they were
-   * actually waiting on was never reached. The page nudges its own work;
-   * cron still drains everything.
+   * Run at most one job per user-facing tick. AI work can legitimately consume
+   * most of a function invocation, so claiming a second job is unsafe and can
+   * leave both the worker and the browser without a clean completion signal.
+   * Cron remains responsible for draining the rest of the queue.
    */
-  // Leave a small amount of invocation headroom while still giving one AI job
-  // enough time to finish. A 45s budget combined with the runner's safety
-  // window previously made the loop's condition false immediately, so the
-  // onboarding nudge processed ZERO jobs every time.
-  return drainQueue({ max: 2, budgetMs: 55_000, projectId: project.id });
+  return drainQueue({ max: 1, budgetMs: 55_000, projectId: project.id });
 });
