@@ -165,6 +165,14 @@ function coerceScalar(value: unknown, node: Node, types: string[]): unknown {
   if (types.includes('string')) {
     if (typeof value === 'number' || typeof value === 'boolean') return String(value);
     if (Array.isArray(value) && value.every(isPrimitive)) return value.join(' ');
+    if (typeof value === 'string') {
+      const max = numberAt(node.maxLength);
+      if (max !== null && value.length > max) {
+        const cut = value.slice(0, max).trimEnd();
+        const boundary = cut.lastIndexOf(' ');
+        return (boundary >= Math.floor(max * 0.7) ? cut.slice(0, boundary) : cut).trimEnd();
+      }
+    }
     if (isPlainObject(value)) {
       const preferred = ['name', 'label', 'title', 'capability', 'feature', 'value', 'description', 'reason'];
       const parts = preferred
