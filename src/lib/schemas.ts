@@ -10,13 +10,34 @@ import { CONTENT_FORMATS, PLATFORMS } from './types';
 
 export const platformSchema = z.enum(PLATFORMS);
 export const formatSchema = z.enum(CONTENT_FORMATS);
-export const pillarTypeSchema = z.enum([
+
+const PILLAR_TYPES = [
   'education',
   'product_demo',
   'entertainment',
   'social_proof',
   'promotion',
-]);
+] as const;
+
+/**
+ * Models routinely vary the label slightly ("Educational", "Product Demo",
+ * "Social Proof", etc.). These are notation differences, not new product
+ * categories. Normalize them before strict validation.
+ */
+function normalizePillarType(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const aliases: Record<string, (typeof PILLAR_TYPES)[number]> = {
+    education: 'education', educational: 'education', educational_content: 'education',
+    product_demo: 'product_demo', productdemo: 'product_demo', product_demonstration: 'product_demo', demo: 'product_demo',
+    entertainment: 'entertainment', entertaining: 'entertainment',
+    social_proof: 'social_proof', socialproof: 'social_proof', testimonial: 'social_proof', testimonials: 'social_proof',
+    promotion: 'promotion', promotional: 'promotion', sales: 'promotion', conversion: 'promotion',
+  };
+  return aliases[normalized] ?? value;
+}
+
+export const pillarTypeSchema = z.preprocess(normalizePillarType, z.enum(PILLAR_TYPES));
 
 /* ── Product analysis ───────────────────────────────────────────────────── */
 
@@ -66,11 +87,11 @@ export type PersonasPayload = z.infer<typeof personasSchema>;
 /* ── Strategy ───────────────────────────────────────────────────────────── */
 
 export const contentMixSchema = z.object({
-  education: z.number().min(0).max(100),
-  product_demo: z.number().min(0).max(100),
-  entertainment: z.number().min(0).max(100),
-  social_proof: z.number().min(0).max(100),
-  promotion: z.number().min(0).max(100),
+  education: z.number().min(0).max(100).default(40),
+  product_demo: z.number().min(0).max(100).default(25),
+  entertainment: z.number().min(0).max(100).default(15),
+  social_proof: z.number().min(0).max(100).default(10),
+  promotion: z.number().min(0).max(100).default(10),
 });
 
 export const strategySchema = z.object({
@@ -105,7 +126,7 @@ export const strategySchema = z.object({
     .default([]),
   growth_strategy: z.string().max(1200).default(''),
   cta_strategy: z.array(z.string()).max(10).default([]),
-  content_mix: contentMixSchema,
+  content_mix: contentMixSchema.default({}),
   pillars: z
     .array(
       z.object({
