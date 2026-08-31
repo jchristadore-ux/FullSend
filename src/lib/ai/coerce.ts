@@ -89,6 +89,11 @@ function walk(value: unknown, node: Node | null, root: Node, depth: number): unk
   }
 
   if (isPlainObject(value)) {
+    // When the schema requires a string, models sometimes return a small
+    // descriptive object. Extract its meaningful text before walking object
+    // properties; otherwise the object would be preserved and strict Zod
+    // validation would reject it.
+    if (types.includes('string')) return coerceScalar(value, resolved, types);
     if (types.includes('array')) return walkArray([value], resolved, root, depth);
     return walkObject(value, resolved, root, depth);
   }
@@ -160,6 +165,17 @@ function coerceScalar(value: unknown, node: Node, types: string[]): unknown {
   if (types.includes('string')) {
     if (typeof value === 'number' || typeof value === 'boolean') return String(value);
     if (Array.isArray(value) && value.every(isPrimitive)) return value.join(' ');
+    if (isPlainObject(value)) {
+      const preferred = ['name', 'label', 'title', 'capability', 'feature', 'value', 'description', 'reason'];
+      const parts = preferred
+        .map((key) => value[key])
+        .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+        .map((v) => v.trim());
+      if (parts.length) return [...new Set(parts)].join(': ');
+      const strings = Object.values(value)
+        .filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+      if (strings.length === 1) return strings[0].trim();
+    }
   }
 
   return value;
