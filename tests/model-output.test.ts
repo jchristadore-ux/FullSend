@@ -129,6 +129,19 @@ describe('repairing notation mistakes', () => {
     expect(coerce({ maturity: 'nearly there' }).maturity).toBe('nearly there');
   });
 
+  it('converts descriptive objects to strings when the schema requires strings', () => {
+    const out = coerce({
+      not_capabilities: [
+        { capability: 'Paid ads', reason: 'No ad-buying integration exists' },
+        { name: 'Email marketing', description: 'No email sender is implemented' },
+      ],
+    });
+    expect(out.not_capabilities).toEqual([
+      'Paid ads: No ad-buying integration exists',
+      'Email marketing: No email sender is implemented',
+    ]);
+  });
+
   it('wraps a lone value where a list was wanted', () => {
     expect(coerce({ tech_stack: 'next' }).tech_stack).toEqual(['next']);
     expect(coerce({ tech_stack: ['next'] }).tech_stack).toEqual(['next']);
