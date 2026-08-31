@@ -2,9 +2,7 @@
  * Marketing strategy and brand profile.
  *
  * Everything downstream — pillars, campaigns, every caption — reads from what
- * this produces, so it is generated once with the premium tier and then reused
- * from cache. The brand profile in particular is the persistent contract that
- * keeps a hundred generated posts sounding like one product.
+ * this produces, so it is generated once and then reused from the durable job.
  */
 import 'server-only';
 import { generateObject } from '../ai/client';
@@ -32,15 +30,24 @@ const STRATEGY_SYSTEM = `You are FullSend's head of marketing strategy.
 
 You are given a verified product analysis and its audience. Produce the strategy
 that an experienced founder-marketer would actually run for this product on
-Instagram and TikTok.
+INSTAGRAM ONLY.
 
 Hold to these:
+- Instagram is the only production platform in scope. Do not create strategy,
+  cadence, campaigns, or recommendations for TikTok, LinkedIn, X, Facebook,
+  Pinterest, YouTube, or any other platform.
 - Positioning must be specific enough that a competitor could not claim it.
 - The content mix must total 100 and must fit THIS product. A developer tool
   earns more education; a consumer app earns more entertainment. Do not return
   the same split for every product.
-- Pillars are what you post about week after week, not campaign names.
-- Campaigns are time-boxed angles with a testable hypothesis.
+- Use ONLY these exact pillar types: education, product_demo, entertainment,
+  social_proof, promotion. Do not invent alternate labels such as educational,
+  demo, testimonial, sales, or product-demonstration.
+- Include all five content_mix fields: education, product_demo, entertainment,
+  social_proof, promotion. Values are percentages and must total 100.
+- Pillars are what you post about week after week, not campaign names. Every
+  pillar must have a type from the exact five-value list above.
+- Campaigns are time-boxed Instagram angles with a testable hypothesis.
 - Cadence must be sustainable by one person with an automated system.
 - No jargon. No "leverage", no "unlock", no "in today's landscape".
 
@@ -55,38 +62,22 @@ machine generates, so it must be concrete and enforceable, not aspirational.
 "words_to_avoid" should include the specific AI-slop phrases that would make
 this product's content sound generated, plus anything off-brand for its audience.
 
+Instagram is the only production platform in scope.
+
 Return JSON only.`;
 
 export interface StrategyResult {
   strategy: MarketingStrategy;
   pillars: ContentPillar[];
   campaigns: Campaign[];
-  /** Null from `buildStrategy`: the brand profile is its own job. */
   brand: BrandProfile | null;
   costUsd: number;
 }
 
-/**
- * Builds the marketing plan, or returns the one already saved.
- *
- * The plan is a durable checkpoint: strategy, pillars, campaigns and the brand
- * profile together. It was rebuilt from scratch on every run of the job — a
- * premium-tier call and a second model call for the brand — which meant a
- * restart, a retry, or a refresh silently paid for a plan that already existed
- * and replaced the one downstream content was written against.
- *
- * `refresh` is the deliberate regeneration the founder asks for.
- */
 export async function buildStrategy(
   scope: TenantScope,
   project: Project,
   analysis: ProductAnalysis,
-  /**
-   * Optional, and in practice empty. The audience step that produced these was
-   * removed: the analysis already carries the target market, the problem
-   * solved and the differentiators, so a separate model call to name personas
-   * restated what was known while adding a stage that could fail.
-   */
   personas: Persona[] = [],
   opts: { refresh?: boolean } = {},
 ): Promise<StrategyResult> {
@@ -108,9 +99,10 @@ export async function buildStrategy(
   const { data, costUsd: strategyCost } = await generateObject({
     task: 'strategy.build',
     system: STRATEGY_SYSTEM,
-    brief: `Build the marketing strategy for ${project.name}.`,
+    brief: `Build the Instagram marketing strategy for ${project.name}.`,
     context: {
       project_name: project.name,
+      production_platform: 'instagram',
       analysis: {
         one_liner: analysis.one_liner,
         what_it_does: analysis.what_it_does,
@@ -120,7 +112,7 @@ export async function buildStrategy(
         problem_solved: analysis.problem_solved,
         differentiators: analysis.differentiators,
         maturity: analysis.maturity,
-        platforms: analysis.platforms,
+        platforms: ['instagram'],
       },
       personas: personas.map((p) => ({
         name: p.name,
@@ -151,9 +143,7 @@ export async function buildStrategy(
     differentiators: data.differentiators.length ? data.differentiators : analysis.differentiators,
     campaign_strategy: data.campaign_strategy,
     posting_cadence: data.posting_cadence,
-    platform_strategy: data.platform_strategy.length
-      ? data.platform_strategy
-      : defaultPlatformStrategy(),
+    platform_strategy: defaultPlatformStrategy(),
     growth_strategy: data.growth_strategy,
     cta_strategy: data.cta_strategy,
     content_mix: mix,
@@ -165,13 +155,6 @@ export async function buildStrategy(
   const pillars = await replacePillars(scope, project, data.pillars, mix);
   const campaigns = await replaceCampaigns(scope, project, data.campaigns, personas);
 
-  /*
-   * The brand profile is a second model call, and it used to run here. Two
-   * premium-tier calls plus the pillar and campaign writes do not fit in a
-   * sixty-second invocation: the plan stage sat on "Working" for as long as
-   * anyone watched, because the invocation was killed before it could save
-   * anything and nothing was left to report. It is its own job now.
-   */
   log.info('strategy built', {
     project: project.id,
     version,
@@ -191,7 +174,6 @@ export function normaliseMix(mix: ContentMix): ContentMix {
   }
   const scaled = keys.map((k) => ({ k, v: (Number(mix[k]) || 0) * (100 / total) }));
   const rounded = scaled.map((s) => ({ ...s, v: Math.round(s.v) }));
-  // Push the rounding remainder onto the largest bucket.
   const drift = 100 - rounded.reduce((s, r) => s + r.v, 0);
   if (drift !== 0) {
     const biggest = rounded.reduce((a, b) => (b.v > a.v ? b : a));
@@ -204,15 +186,9 @@ function defaultPlatformStrategy() {
   return [
     {
       platform: 'instagram' as const,
-      rationale: 'Saves and shares compound; carousels teach.',
+      rationale: 'Instagram is the sole production channel; saves, shares, Reels and carousels compound reach.',
       formats: ['reel' as const, 'carousel' as const, 'static' as const],
-      weight: 45,
-    },
-    {
-      platform: 'tiktok' as const,
-      rationale: 'Best cold reach for an unknown product.',
-      formats: ['short_video' as const],
-      weight: 55,
+      weight: 100,
     },
   ];
 }
@@ -226,7 +202,6 @@ async function replacePillars(
   const existing = await db().find(scope, 'content_pillars', { where: { project_id: project.id } });
   for (const p of existing) await db().remove(scope, 'content_pillars', p.id);
 
-  // Pillar weight is derived from the mix so the two can never disagree.
   const byType = new Map<PillarType, number>();
   for (const p of incoming) byType.set(p.type, (byType.get(p.type) ?? 0) + 1);
 
@@ -258,7 +233,6 @@ async function replaceCampaigns(
   }
 
   const start = new Date();
-  // Campaigns run in sequence, a fortnight each, so the calendar has structure.
   return db().insertMany(
     scope,
     'campaigns',
@@ -273,7 +247,7 @@ async function replaceCampaigns(
         goal: c.goal,
         hypothesis: c.hypothesis,
         target_persona_id: personas[i % Math.max(1, personas.length)]?.id ?? null,
-        platforms: ['instagram' as const, 'tiktok' as const],
+        platforms: ['instagram' as const],
         starts_at: startsAt.toISOString(),
         ends_at: endsAt.toISOString(),
         status: i === 0 ? ('active' as const) : ('planned' as const),
@@ -283,9 +257,6 @@ async function replaceCampaigns(
   );
 }
 
-/**
- * The brand profile, built once and reused. Second half of the plan stage.
- */
 export async function ensureBrandProfile(
   scope: TenantScope,
   project: Project,
@@ -323,7 +294,6 @@ export async function buildBrandProfile(
         audience_summary: strategy.audience_summary,
         cta_strategy: strategy.cta_strategy,
       },
-      // Seeded with the house list so no product ever ships AI-slop phrasing.
       baseline_words_to_avoid: FULLSEND_VOICE.wordsToAvoid,
     },
     schema: brandProfileSchema,
@@ -362,7 +332,6 @@ export async function buildBrandProfile(
   return { brand, costUsd };
 }
 
-/** Approving a strategy is what unlocks scheduling. */
 export async function approveStrategy(
   scope: TenantScope,
   strategyId: string,
