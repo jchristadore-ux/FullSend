@@ -54,7 +54,12 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
 
   // Keep the complete schema for local repair/validation. Provider dialects are
   // derived separately so vendor restrictions can never weaken validation.
-  const validationSchema = opts.jsonSchema ?? jsonSchemaFor(opts.schema) ?? undefined;
+  // Local validation/repair MUST always use the canonical schema derived from
+  // the Zod validator. opts.jsonSchema is an optional provider override and may
+  // intentionally use a vendor dialect that omits constraints or properties.
+  // Using that override for coercion caused valid repair logic to be skipped
+  // (not_capabilities objects, overlong category strings, etc.).
+  const validationSchema = jsonSchemaFor(opts.schema) ?? undefined;
   const derivedProviderSchema = provider.name === 'anthropic' ? anthropicJsonSchemaFor(opts.schema) : validationSchema;
   const providerSchema = opts.jsonSchema ?? derivedProviderSchema ?? undefined;
   const req: CompletionRequest = {
