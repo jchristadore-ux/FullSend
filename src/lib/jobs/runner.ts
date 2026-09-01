@@ -310,4 +310,77 @@ export async function drainQueue(
 export async function queueStats(): Promise<{ queued: number; running: number; succeeded: number; failed: number; dead: number; oldestQueuedAt: string | null }> {
   const scope = systemScope('queue stats'); const jobs = await db().find(scope, 'jobs', { orderBy: 'created_at', direction: 'asc' }); const counts = { queued: 0, running: 0, succeeded: 0, failed: 0, dead: 0 }; let oldestQueuedAt: string | null = null; for (const j of jobs) { if (j.status in counts) counts[j.status as keyof typeof counts]++; if (j.status === 'queued' && !oldestQueuedAt) oldestQueuedAt = j.run_after; } return { ...counts, oldestQueuedAt };
 }
+/**
+ * Whether anything is actually draining the queue, and what it is stuck on.
+ *
+ * The pipeline screen can say a stage is queued. It cannot say why nothing has
+ * picked it up, because that is not a property of the row — it is a property
+ * of the deployment: whether a worker is running at all, and whether the job
+ * at the head of the queue is even due yet. Answering that took reading the
+ * database by hand, which is exactly the position this whole exercise was
+ * meant to get out of.
+ *
+ * Deliberately narrow, because /api/health is public and unauthenticated:
+ * counts, types and timings only. No payloads — `analyze_repository` carries a
+ * GitHub token in its — and no error text, which is where a credential
+ * escapes.
+ */
+export interface QueueHealth {
+  queued: number;
+  running: number;
+  dead: number;
+  /** The job at the head of the queue, described without exposing it. */
+  oldestQueued: {
+    type: JobType;
+    attempts: number;
+    waitingSeconds: number;
+    /** Negative once it is due. Positive means the queue is correctly ignoring it. */
+    dueInSeconds: number;
+    hasError: boolean;
+  } | null;
+  /** When a worker last finished anything. Null if one never has. */
+  lastFinishedAt: string | null;
+  secondsSinceLastFinished: number | null;
+}
+
+export async function queueHealth(): Promise<QueueHealth> {
+  const scope = systemScope('queue health');
+  const jobs = await db().find(scope, 'jobs', { orderBy: 'created_at', direction: 'asc', limit: 500 });
+  const now = Date.now();
+
+  let queued = 0, running = 0, dead = 0;
+  let head: Job | null = null;
+  let lastFinished = 0;
+
+  for (const job of jobs) {
+    if (job.status === 'queued') {
+      queued++;
+      if (!head || Date.parse(job.run_after) < Date.parse(head.run_after)) head = job;
+    } else if (job.status === 'running') running++;
+    else if (job.status === 'dead') dead++;
+
+    if (job.status === 'succeeded') {
+      const at = Date.parse(job.updated_at);
+      if (Number.isFinite(at) && at > lastFinished) lastFinished = at;
+    }
+  }
+
+  return {
+    queued,
+    running,
+    dead,
+    oldestQueued: head
+      ? {
+          type: head.type,
+          attempts: head.attempts,
+          waitingSeconds: Math.max(0, Math.round((now - Date.parse(head.updated_at)) / 1000)),
+          dueInSeconds: Math.round((Date.parse(head.run_after) - now) / 1000),
+          hasError: Boolean(head.last_error),
+        }
+      : null,
+    lastFinishedAt: lastFinished ? new Date(lastFinished).toISOString() : null,
+    secondsSinceLastFinished: lastFinished ? Math.round((now - lastFinished) / 1000) : null,
+  };
+}
+
 export function cronSecretValid(value: string | null): boolean { const secret = env.jobs.cronSecret; if (!secret || !value) return false; const trimmed = value.trim(); if (trimmed === secret) return true; const prefix = 'Bearer '; return trimmed.startsWith(prefix) && trimmed.slice(prefix.length).trim() === secret; }

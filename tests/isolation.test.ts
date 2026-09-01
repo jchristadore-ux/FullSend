@@ -17,6 +17,7 @@ import {
   drainQueue,
   HEAVY_JOB_RESERVE_MS,
   HEAVY_JOBS,
+  queueHealth,
   queueStats,
   runJob,
 } from '@/lib/jobs/runner';
@@ -439,6 +440,88 @@ describe('background jobs', () => {
     expect(cronSecretValid('Bearer wrong')).toBe(false);
     expect(cronSecretValid('Bearer test-cron-secret')).toBe(true);
     expect(cronSecretValid('test-cron-secret')).toBe(true);
+  });
+});
+
+/*
+ * The report that answers "why is nothing happening".
+ *
+ * A stage can say it is queued. Only this can say whether a worker exists to
+ * claim it, and whether the job at the head of the queue is even due — the two
+ * things that took reading the database by hand to find out.
+ */
+describe('queue health', () => {
+  let ctx: TestContext;
+  let project: Project;
+
+  beforeEach(async () => {
+    ctx = await setupContext();
+    project = await createProject(ctx.scope, ctx.user.id);
+  });
+  afterEach(() => teardown());
+
+  it('reports an empty queue as empty', async () => {
+    const health = await queueHealth();
+    expect(health.queued).toBe(0);
+    expect(health.oldestQueued).toBeNull();
+    expect(health.lastFinishedAt).toBeNull();
+  });
+
+  it('names the job at the head of the queue and how long it has waited', async () => {
+    const sys = systemScope('test');
+    await enqueue(sys, 'generate_content', { projectId: project.id }, { projectId: project.id });
+
+    const health = await queueHealth();
+    expect(health.queued).toBe(1);
+    expect(health.oldestQueued?.type).toBe('generate_content');
+    expect(health.oldestQueued?.attempts).toBe(0);
+    expect(health.oldestQueued?.hasError).toBe(false);
+    // Due now, so the queue has no excuse for ignoring it.
+    expect(health.oldestQueued!.dueInSeconds).toBeLessThanOrEqual(0);
+  });
+
+  /*
+   * The distinction that matters when a stage looks stuck: a job held back by
+   * its own backoff is behaving correctly, and a due one that nothing has
+   * claimed means no worker is running. They look identical on the pipeline
+   * screen and opposite here.
+   */
+  it('says when the head of the queue is not due yet', async () => {
+    const sys = systemScope('test');
+    const later = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    await enqueue(sys, 'generate_content', { projectId: project.id }, {
+      projectId: project.id,
+      runAfter: later,
+    });
+
+    const health = await queueHealth();
+    expect(health.oldestQueued!.dueInSeconds).toBeGreaterThan(60);
+  });
+
+  it('reports when a worker last finished something', async () => {
+    const sys = systemScope('test');
+    await enqueue(sys, 'schedule_content', { projectId: project.id }, { projectId: project.id });
+    await drainQueue({ max: 5 });
+
+    const health = await queueHealth();
+    expect(health.lastFinishedAt).not.toBeNull();
+    expect(health.secondsSinceLastFinished).toBeLessThan(60);
+  });
+
+  it('never exposes a job payload or its error text', async () => {
+    const sys = systemScope('test');
+    // A payload of exactly the kind that must not leave the building.
+    await enqueue(
+      sys,
+      'analyze_repository',
+      { projectId: project.id, repository: 'acme/x', githubToken: 'ghp_AAAAAAAAAAAAAAAAAAAA' },
+      { projectId: project.id },
+    );
+
+    const serialized = JSON.stringify(await queueHealth());
+    expect(serialized).not.toContain('ghp_');
+    expect(serialized).not.toContain('githubToken');
+    expect(serialized).not.toContain('acme/x');
   });
 });
 

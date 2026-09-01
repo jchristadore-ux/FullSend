@@ -15,6 +15,7 @@
 import { NextResponse } from 'next/server';
 import { env, capabilities } from '@/lib/env';
 import { isSchemaMissing } from '@/lib/db/supabase-store';
+import { queueHealth, type QueueHealth } from '@/lib/jobs/runner';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -337,6 +338,30 @@ export async function GET(): Promise<NextResponse> {
    * performs would fail.
    */
   const tiktokVerification = await checkTikTokFile();
+
+  /*
+   * Never let a diagnostic take down the thing it diagnoses: with no database
+   * configured, or one that is refusing connections, this is simply unknown
+   * and the rest of the report still renders.
+   */
+  let queue: QueueHealth | null = null;
+  try {
+    queue = await queueHealth();
+  } catch {
+    queue = null;
+  }
+  if (queue && queue.oldestQueued && queue.oldestQueued.dueInSeconds <= 0) {
+    const waited = queue.oldestQueued.waitingSeconds;
+    // Two lock timeouts is well past any healthy claim delay, so at that point
+    // the queue is not slow, it is unattended.
+    if (waited > 360) {
+      problems.push(
+        `A ${queue.oldestQueued.type} job has been due and unclaimed for ${Math.round(waited / 60)} minutes. ` +
+          'Nothing is draining the queue — check that the FullSend heartbeat workflow is running and that ' +
+          'FULLSEND_URL and FULLSEND_CRON_SECRET match this deployment.',
+      );
+    }
+  }
   if (!tiktokVerification.ok) {
     reviewBlockers.push(
       `TikTok cannot verify this host: ${tiktokVerification.note} Its Terms and Privacy URLs will be rejected as unverified.`,
@@ -368,6 +393,11 @@ export async function GET(): Promise<NextResponse> {
       reviewBlockers,
       /** Whether TikTok's URL-ownership file is actually being served. */
       tiktokVerification,
+      /**
+       * Whether a worker is actually draining the queue, and what is at the
+       * head of it. Counts and timings only — see `QueueHealth`.
+       */
+      queue,
     },
     { headers: { 'Cache-Control': 'no-store' } },
   );
