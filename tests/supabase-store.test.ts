@@ -184,33 +184,45 @@ describe('claiming a job', () => {
     expect(CLAIM_CANDIDATES).toBeGreaterThan(1);
   });
 
-  it('compares an unlocked job against null', async () => {
+  /*
+   * These two replace a pair that pinned the old compare-and-set: `.is(null)`
+   * for a queued row and `.eq(<exact stamp>)` for a dead worker's. They were
+   * guarding a real requirement — the claim must build a filter PostgREST
+   * accepts, and a dead worker's job must actually be reclaimable — but they
+   * pinned one *implementation* of it, and that implementation was equality on
+   * a timestamp: a value that has to survive Postgres microseconds, a JSON
+   * round trip and URL encoding of a `+` offset before it matches. Production
+   * showed the cost — the select found three due jobs and the update took none,
+   * so the queue called itself empty for hours.
+   *
+   * The requirement is kept; the fragile predicate is not.
+   */
+  it('guards a queued claim on status alone, with no lock predicate', async () => {
     const { client, calls } = fakeClient([JOB]);
     const store = new SupabaseStore(client);
 
     await store.claimNextJob('2026-01-02T00:00:00.000Z', 60_000);
 
-    expect(calls.some((c) => c.method === 'is' && c.args[0] === 'locked_at' && c.args[1] === null))
-      .toBe(true);
+    // Status is the whole guard: the winner flips it, so a second worker's own
+    // status check matches nothing. Nothing is compared against locked_at.
+    expect(calls.some((c) => c.method === 'eq' && c.args[0] === 'status')).toBe(true);
+    const lockFilters = calls.filter((c) => c.args[0] === 'locked_at' && c.method !== 'or');
+    expect(lockFilters).toHaveLength(0);
   });
 
-  it('compares a dead worker’s lock with eq, never is', async () => {
-    /*
-     * `.is()` accepts null, true and false — nothing else. Passing it a
-     * timestamp builds `locked_at=is.2026-01-01T…`, which PostgREST rejects,
-     * so every attempt to reclaim a job from a worker that died threw instead
-     * of recovering it. That is the one case the lease exists for, and no
-     * MemoryStore test could see it.
-     */
+  it('guards a dead worker’s reclaim on the lock’s age, never its value', async () => {
     const stale = { ...JOB, status: 'running', locked_at: '2026-01-01T00:00:00.000Z' };
     const { client, calls } = fakeClient([stale]);
     const store = new SupabaseStore(client);
 
     await store.claimNextJob('2026-01-02T00:00:00.000Z', 60_000);
 
+    // Both workers see 'running', so this reclaim needs more than status. The
+    // winner writes locked_at = now, which is no longer stale, so the loser
+    // matches nothing — mutual exclusion without an equality on a timestamp.
     const lockFilters = calls.filter((c) => c.args[0] === 'locked_at');
-    expect(lockFilters.some((c) => c.method === 'eq' && c.args[1] === stale.locked_at)).toBe(true);
-    expect(lockFilters.some((c) => c.method === 'is')).toBe(false);
+    expect(lockFilters.some((c) => c.method === 'lt')).toBe(true);
+    expect(lockFilters.some((c) => c.method === 'eq' || c.method === 'is')).toBe(false);
   });
 
   it('bounds the claim to jobs that existed when the pass began', async () => {

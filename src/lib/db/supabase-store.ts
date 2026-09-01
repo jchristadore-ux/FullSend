@@ -392,18 +392,32 @@ export class SupabaseStore implements Store {
         .eq('id', candidate.id)
         .eq('status', candidate.status);
       /*
-       * The lock is part of the compare-and-set, so a worker that reclaims a
-       * stale job loses harmlessly to whoever got there first.
+       * A stale reclaim is guarded by the lock's *age*, never by its exact
+       * value, and the difference is why the queue stopped.
        *
-       * `.is()` is only valid against null, true and false. Passing it a
-       * timestamp builds `locked_at=is.2026-01-01T00:00:00Z`, which PostgREST
-       * rejects outright — so every reclaim of a dead worker's job threw
-       * instead of recovering it, which is precisely the case this exists for.
+       * The compare-and-set used to pin `locked_at` to the precise timestamp
+       * read a moment earlier — `.is(null)` for a queued row, `.eq(<stamp>)`
+       * for a dead worker's. Both are equality on a value that has to survive
+       * Postgres microseconds, a JSON round trip, and URL encoding of a `+`
+       * offset, and every one of those is a chance to stop matching. When it
+       * does stop matching, the update touches no rows, the claim returns
+       * null, and the queue reports itself empty while three due jobs sit in
+       * it. That is exactly what production showed: the select found all
+       * three, the update took none.
+       *
+       * Neither predicate was load-bearing:
+       *
+       *   queued  — `status = 'queued'` is the whole guard. Whoever wins flips
+       *             it to 'running', so a second worker's own status check
+       *             matches nothing.
+       *   running — the reclaim needs more, since both workers see 'running'.
+       *             `locked_at < staleBefore` supplies it: the winner writes
+       *             `locked_at = now`, which is no longer stale, so the loser
+       *             matches nothing.
+       *
+       * Same mutual exclusion, no equality on a timestamp.
        */
-      claim =
-        candidate.locked_at === null
-          ? claim.is('locked_at', null)
-          : claim.eq('locked_at', candidate.locked_at);
+      if (candidate.status === 'running') claim = claim.lt('locked_at', staleBefore);
 
       const { data: claimed, error: claimErr } = await claim.select().maybeSingle();
       if (claimErr) throw this.wrap(claimErr, 'jobs');

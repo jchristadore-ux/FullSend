@@ -498,6 +498,28 @@ describe('queue health', () => {
     expect(health.oldestQueued!.dueInSeconds).toBeGreaterThan(60);
   });
 
+  /*
+   * The number that tells the two failure modes apart. `queued` counts rows as
+   * a reader sees them; `claimable` counts them as the claim's own filter sees
+   * them. Agreement means the query is fine and the compare-and-set is losing;
+   * disagreement means the filter is wrong. Without it, a stopped queue offers
+   * no way to choose between those, which is exactly where this got stuck.
+   */
+  it('counts what the claim itself would consider takeable', async () => {
+    const sys = systemScope('test');
+    await enqueue(sys, 'schedule_content', { projectId: project.id }, { projectId: project.id });
+    await enqueue(sys, 'generate_content', { projectId: project.id }, { projectId: project.id });
+    // Held back by its own backoff, so takeable by neither.
+    await enqueue(sys, 'collect_analytics', { projectId: project.id }, {
+      projectId: project.id,
+      runAfter: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+
+    const health = await queueHealth();
+    expect(health.queued).toBe(3);
+    expect(health.claimable).toBe(2);
+  });
+
   it('reports when a worker last finished something', async () => {
     const sys = systemScope('test');
     await enqueue(sys, 'schedule_content', { projectId: project.id }, { projectId: project.id });
