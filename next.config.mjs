@@ -2,7 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  serverExternalPackages: ['@anthropic-ai/sdk', 'openai'],
+  serverExternalPackages: ['@anthropic-ai/sdk', 'openai', 'pg'],
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: '**.supabase.co' },

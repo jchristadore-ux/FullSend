@@ -60,6 +60,15 @@ export const env = {
     url: opt('NEXT_PUBLIC_SUPABASE_URL'),
     anonKey: opt('NEXT_PUBLIC_SUPABASE_ANON_KEY'),
     serviceRoleKey: opt('SUPABASE_SERVICE_ROLE_KEY'),
+    /*
+     * A direct Postgres connection, used for one thing: applying migrations.
+     *
+     * The service-role key cannot do it — PostgREST speaks tables, not DDL —
+     * so without this, every schema change needs a person with the SQL editor
+     * open. Optional: unset, FullSend reports what is missing and asks for it
+     * to be run by hand, exactly as before.
+     */
+    dbUrl: opt('SUPABASE_DB_URL'),
     storageBucket: opt('SUPABASE_STORAGE_BUCKET') ?? 'fullsend-creative',
   },
 
