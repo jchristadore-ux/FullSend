@@ -77,16 +77,34 @@ const handlers: Record<JobType, Handler> = {
 };
 
 export function backoffSeconds(attempt: number): number { return Math.min(3600, 60 * 2 ** (attempt - 1)); }
+
 export async function runJob(job: Job): Promise<{ status: 'succeeded' | 'failed' | 'dead' }> {
   const scope = systemScope('job runner'); const started = Date.now();
   try { const handler = handlers[job.type]; if (!handler) throw new Error(`No handler for job type ${job.type}`); const result = await handler(job); await db().update(scope, 'jobs', job.id, { status: 'succeeded', result, last_error: null, locked_at: null, updated_at: nowIso() }); log.info('job succeeded', { id: job.id, type: job.type, ms: Date.now() - started }); return { status: 'succeeded' }; }
   catch (e) { const message = e instanceof Error ? e.message : String(e); const retryable = isFullSendError(e) ? e.retryable : true; const exhausted = job.attempts >= job.max_attempts || !retryable; if (exhausted) { await db().update(scope, 'jobs', job.id, { status: 'dead', last_error: message, locked_at: null, updated_at: nowIso() }); await recordError(scope, { projectId: job.project_id, scope: `job:${job.type}`, message, remedy: isFullSendError(e) ? e.remedy : null, fatal: true }); return { status: 'dead' }; } const runAfter = new Date(Date.now() + backoffSeconds(job.attempts) * 1000).toISOString(); await db().update(scope, 'jobs', job.id, { status: 'queued', last_error: message, run_after: runAfter, locked_at: null, updated_at: nowIso() }); await recordError(scope, { projectId: job.project_id, scope: `job:${job.type}`, message, remedy: isFullSendError(e) ? e.remedy : null, fatal: false }); return { status: 'failed' }; }
 }
+
 export async function drainQueue(opts: { max?: number; budgetMs?: number; projectId?: string | null } = {}): Promise<{ processed: number; succeeded: number; failed: number; dead: number }> {
-  const max = opts.max ?? 20; const budgetMs = opts.budgetMs ?? 50_000; const deadline = Date.now() + budgetMs; const ROOM_TO_RUN_MS = 25_000; let processed = 0, succeeded = 0, failed = 0, dead = 0;
-  while (processed < max && Date.now() + ROOM_TO_RUN_MS < deadline) { const job = await db().claimNextJob(nowIso(), LOCK_TIMEOUT_MS, opts.projectId ?? null); if (!job) break; const { status } = await runJob(job); processed++; if (status === 'succeeded') succeeded++; else if (status === 'dead') dead++; else failed++; }
+  // A cron/serverless invocation processes ONE durable job only. It never follows
+  // the chain into another AI call. The completed job persists its successor;
+  // the next heartbeat invocation handles that successor.
+  const max = 1;
+  const budgetMs = Math.min(opts.budgetMs ?? 50_000, 55_000);
+  const deadline = Date.now() + budgetMs;
+  const ROOM_TO_RUN_MS = 25_000;
+  let processed = 0, succeeded = 0, failed = 0, dead = 0;
+  while (processed < max && Date.now() + ROOM_TO_RUN_MS < deadline) {
+    const job = await db().claimNextJob(nowIso(), LOCK_TIMEOUT_MS, opts.projectId ?? null);
+    if (!job) break;
+    const { status } = await runJob(job);
+    processed++;
+    if (status === 'succeeded') succeeded++;
+    else if (status === 'dead') dead++;
+    else failed++;
+  }
   return { processed, succeeded, failed, dead };
 }
+
 export async function queueStats(): Promise<{ queued: number; running: number; succeeded: number; failed: number; dead: number; oldestQueuedAt: string | null }> {
   const scope = systemScope('queue stats'); const jobs = await db().find(scope, 'jobs', { orderBy: 'created_at', direction: 'asc' }); const counts = { queued: 0, running: 0, succeeded: 0, failed: 0, dead: 0 }; let oldestQueuedAt: string | null = null; for (const j of jobs) { if (j.status in counts) counts[j.status as keyof typeof counts]++; if (j.status === 'queued' && !oldestQueuedAt) oldestQueuedAt = j.run_after; } return { ...counts, oldestQueuedAt };
 }
