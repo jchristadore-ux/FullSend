@@ -17,6 +17,7 @@ import { publicUrlsFor } from '../creative/media';
 import { runQualityControl } from '../qc/check';
 import { getUsableConnection, markNeedsAttention } from '../social/connections';
 import { getAdapter } from '../social/registry';
+import type { PublishResult } from '../social/types';
 import type {
   ContentItem,
   Project,
@@ -56,7 +57,10 @@ export async function publishScheduledPost(
     return { status: 'published' };
   }
 
-  await db().update(scope, 'scheduled_posts', post.id, { status: 'publishing' });
+  await db().update(scope, 'scheduled_posts', post.id, {
+    status: 'publishing',
+    started_at: post.started_at ?? nowIso(),
+  });
   await db().update(scope, 'content_items', content.id, { status: 'publishing' });
 
   try {
@@ -95,6 +99,37 @@ export async function publishScheduledPost(
 
     const connection = await getUsableConnection(scope, project.id, post.platform);
     const adapter = getAdapter(post.platform);
+    const caption = buildCaption(content);
+
+    /*
+     * Recovery comes before anything else.
+     *
+     * If a previous attempt got as far as submitting a container, the post may
+     * already be live with nothing here to say so — the response was lost, not
+     * the publish. Asking the platform first is what makes a retry safe; going
+     * straight to publish is how the same post ends up on the account twice.
+     */
+    if (post.publish_submitted_at && post.platform_container_id) {
+      const recovered = await recoverSubmittedPublish({
+        adapter,
+        connection,
+        containerId: post.platform_container_id,
+        caption,
+      });
+      if (recovered) {
+        log.info('recovered a publish whose response was lost', {
+          postId: post.id,
+          externalId: recovered.externalId,
+        });
+        return recordPublished(scope, {
+          post,
+          project,
+          content,
+          accountId: connection.account.id,
+          result: recovered,
+        });
+      }
+    }
 
     const media = await publicUrlsFor(scope, project.id, content.creative_asset_ids);
     const videoUrl = content.video_plan?.rendered_url ?? media.video;
@@ -112,72 +147,146 @@ export async function publishScheduledPost(
     }
 
     const result = await adapter.publish(connection.tokens, connection.info, {
-      caption: buildCaption(content),
+      caption,
       format: content.format,
       mediaUrls: media.images,
       videoUrl,
       coverUrl: media.cover,
       shareToFeed: true,
+      resumeContainerId: post.platform_container_id,
+      // Both of these are written before the platform is asked to do anything
+      // irreversible, so a worker killed mid-publish leaves behind enough to
+      // work out what happened.
+      onContainer: async (containerId) => {
+        await db().update(scope, 'scheduled_posts', post.id, {
+          platform_container_id: containerId,
+        });
+      },
+      onSubmit: async (containerId) => {
+        await db().update(scope, 'scheduled_posts', post.id, {
+          platform_container_id: containerId,
+          publish_submitted_at: nowIso(),
+        });
+      },
     });
 
-    const publishedAt = nowIso();
-    const publishedPost = await db().insert(scope, 'published_posts', {
-      id: newId(),
-      project_id: project.id,
-      content_item_id: content.id,
-      scheduled_post_id: post.id,
-      social_account_id: connection.account.id,
-      platform: post.platform,
-      external_id: result.externalId,
-      permalink: result.permalink,
-      published_at: publishedAt,
-      platform_response: result.raw,
+    return recordPublished(scope, {
+      post,
+      project,
+      content,
+      accountId: connection.account.id,
+      result,
     });
-
-    await db().update(scope, 'scheduled_posts', post.id, {
-      status: 'published',
-      last_error: null,
-      next_attempt_at: null,
-    });
-    await db().update(scope, 'content_items', content.id, {
-      status: 'published',
-      published_at: publishedAt,
-      updated_at: publishedAt,
-    });
-
-    await audit(scope, {
-      user_id: project.user_id,
-      project_id: project.id,
-      action: 'post.published',
-      target: `${post.platform}:${result.externalId}`,
-      metadata: { contentId: content.id, permalink: result.permalink },
-      ip: null,
-    });
-
-    // TikTok tells us when a post is restricted; pass that through honestly.
-    if (result.raw?.visibility_restricted) {
-      await notify(scope, {
-        user_id: project.user_id,
-        project_id: project.id,
-        severity: 'warning',
-        title: 'Posted to TikTok, but private',
-        body:
-          `"${content.hook.slice(0, 60)}" was published as SELF_ONLY. ` +
-          String(result.raw.restriction_reason ?? ''),
-        action_label: 'How to fix this',
-        action_href: '/app/accounts/tiktok/setup',
-      });
-    }
-
-    log.info('post published', {
-      project: project.id,
-      platform: post.platform,
-      externalId: result.externalId,
-    });
-    return { status: 'published', publishedPost };
   } catch (e) {
     return handlePublishError(scope, post, project, content, e);
   }
+}
+
+/**
+ * Asks the platform whether a submitted container is already live.
+ *
+ * An adapter that cannot answer throws, and that throw is deliberately not
+ * swallowed: a post held for one more attempt is recoverable, a post published
+ * twice is not.
+ */
+async function recoverSubmittedPublish(input: {
+  adapter: ReturnType<typeof getAdapter>;
+  connection: Awaited<ReturnType<typeof getUsableConnection>>;
+  containerId: string;
+  caption: string;
+}): Promise<PublishResult | null> {
+  const { adapter, connection, containerId, caption } = input;
+  if (!adapter.findPublished) return null;
+  return adapter.findPublished(connection.tokens, connection.info, { containerId, caption });
+}
+
+/** Writes the receipt. The only place a post becomes PUBLISHED. */
+async function recordPublished(
+  scope: TenantScope,
+  input: {
+    post: ScheduledPost;
+    project: Project;
+    content: ContentItem;
+    accountId: Uuid;
+    result: PublishResult;
+  },
+): Promise<PublishOutcome> {
+  const { post, project, content, accountId, result } = input;
+
+  /*
+   * The database is the last line of defence against a double publish: one
+   * published_posts row per scheduled post, enforced by a unique index. If a
+   * row already exists, the post is live and this attempt adds nothing.
+   */
+  const already = await db().findOne(scope, 'published_posts', {
+    where: { scheduled_post_id: post.id },
+  });
+  if (already) {
+    await db().update(scope, 'scheduled_posts', post.id, {
+      status: 'published',
+      published_at: already.published_at,
+      last_error: null,
+      next_attempt_at: null,
+    });
+    return { status: 'published', publishedPost: already };
+  }
+
+  const publishedAt = nowIso();
+  const publishedPost = await db().insert(scope, 'published_posts', {
+    id: newId(),
+    project_id: project.id,
+    content_item_id: content.id,
+    scheduled_post_id: post.id,
+    social_account_id: accountId,
+    platform: post.platform,
+    external_id: result.externalId,
+    permalink: result.permalink,
+    published_at: publishedAt,
+    platform_response: result.raw,
+  });
+
+  await db().update(scope, 'scheduled_posts', post.id, {
+    status: 'published',
+    published_at: publishedAt,
+    last_error: null,
+    next_attempt_at: null,
+  });
+  await db().update(scope, 'content_items', content.id, {
+    status: 'published',
+    published_at: publishedAt,
+    updated_at: publishedAt,
+  });
+
+  await audit(scope, {
+    user_id: project.user_id,
+    project_id: project.id,
+    action: 'post.published',
+    target: `${post.platform}:${result.externalId}`,
+    metadata: { contentId: content.id, permalink: result.permalink },
+    ip: null,
+  });
+
+  // TikTok tells us when a post is restricted; pass that through honestly.
+  if (result.raw?.visibility_restricted) {
+    await notify(scope, {
+      user_id: project.user_id,
+      project_id: project.id,
+      severity: 'warning',
+      title: 'Posted to TikTok, but private',
+      body:
+        `"${content.hook.slice(0, 60)}" was published as SELF_ONLY. ` +
+        String(result.raw.restriction_reason ?? ''),
+      action_label: 'How to fix this',
+      action_href: '/app/accounts/tiktok/setup',
+    });
+  }
+
+  log.info('post published', {
+    project: project.id,
+    platform: post.platform,
+    externalId: result.externalId,
+  });
+  return { status: 'published', publishedPost };
 }
 
 function needsVideo(format: string): boolean {
@@ -204,6 +313,18 @@ async function handlePublishError(
 
   const attempts = post.attempts + 1;
   const maxAttempts = env.jobs.maxAttempts;
+
+  /*
+   * A container Meta has rejected or expired can never be published, so the
+   * next attempt must build a new one. Every other failure keeps the container:
+   * re-uploading the media is how one post becomes two.
+   */
+  if (err.meta?.containerUnusable) {
+    await db().update(scope, 'scheduled_posts', post.id, {
+      platform_container_id: null,
+      publish_submitted_at: null,
+    });
+  }
 
   // A dead connection is not a retry problem — it needs the founder.
   const needsAttention = Boolean(err.meta?.needsAttention) || err.code === 'connection_error';

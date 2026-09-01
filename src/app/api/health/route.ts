@@ -92,6 +92,72 @@ async function checkSchema(): Promise<Schema> {
   }
 }
 
+type Migration =
+  | { checked: false; reason: string }
+  | { checked: true; applied: boolean; error?: string };
+
+/**
+ * Asks whether the durable-publishing columns are actually in the database.
+ *
+ * A migration file in the repository is not a migration in Postgres, and the
+ * gap between them is invisible until the first publish — at which point the
+ * publisher cannot record the container id it needs to avoid publishing the
+ * same post twice. Selecting the column is the only honest way to know.
+ */
+async function checkPublishingMigration(): Promise<Migration> {
+  const { url, serviceRoleKey } = env.supabase;
+  if (!url) return { checked: false, reason: 'NEXT_PUBLIC_SUPABASE_URL is not set' };
+  if (!serviceRoleKey) return { checked: false, reason: 'SUPABASE_SERVICE_ROLE_KEY is not set' };
+
+  const base = url.replace(/\/+$/, '');
+  try {
+    const res = await fetch(
+      `${base}/rest/v1/scheduled_posts?select=platform_container_id,publish_submitted_at&limit=1`,
+      {
+        headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}` },
+        signal: AbortSignal.timeout(REACHABILITY_TIMEOUT_MS),
+        cache: 'no-store',
+      },
+    );
+    if (res.ok) return { checked: true, applied: true };
+    const body = (await res.json().catch(() => ({}))) as { message?: string; code?: string };
+    return { checked: true, applied: false, error: body.message ?? `HTTP ${res.status}` };
+  } catch (e) {
+    return { checked: true, applied: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+type Storage =
+  | { checked: false; reason: string }
+  | { checked: true; exists: boolean; public?: boolean; error?: string };
+
+/**
+ * Asks whether the creative bucket exists and is public.
+ *
+ * Meta fetches media from a public URL with no session of ours. A bucket that
+ * is missing or private fails at publish time with an error from Instagram
+ * about the media, which reads like a content problem and is not one.
+ */
+async function checkCreativeStorage(): Promise<Storage> {
+  const { url, serviceRoleKey, storageBucket } = env.supabase;
+  if (!url) return { checked: false, reason: 'NEXT_PUBLIC_SUPABASE_URL is not set' };
+  if (!serviceRoleKey) return { checked: false, reason: 'SUPABASE_SERVICE_ROLE_KEY is not set' };
+
+  const base = url.replace(/\/+$/, '');
+  try {
+    const res = await fetch(`${base}/storage/v1/bucket/${encodeURIComponent(storageBucket)}`, {
+      headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}` },
+      signal: AbortSignal.timeout(REACHABILITY_TIMEOUT_MS),
+      cache: 'no-store',
+    });
+    if (!res.ok) return { checked: true, exists: false, error: `HTTP ${res.status}` };
+    const body = (await res.json().catch(() => ({}))) as { public?: boolean };
+    return { checked: true, exists: true, public: Boolean(body.public) };
+  } catch (e) {
+    return { checked: true, exists: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** Present and non-empty. The value itself never leaves the server. */
 const set = (v: string | undefined) => Boolean(v && v.trim());
 
@@ -155,7 +221,12 @@ async function checkTikTokFile(): Promise<TikTokFile> {
 }
 
 export async function GET(): Promise<NextResponse> {
-  const [supabase, schema] = await Promise.all([reachSupabase(), checkSchema()]);
+  const [supabase, schema, publishingMigration, creativeStorage] = await Promise.all([
+    reachSupabase(),
+    checkSchema(),
+    checkPublishingMigration(),
+    checkCreativeStorage(),
+  ]);
 
   const required = {
     NEXT_PUBLIC_APP_URL: set(live('NEXT_PUBLIC_APP_URL')),
@@ -184,6 +255,33 @@ export async function GET(): Promise<NextResponse> {
         ? `Could not read the database schema: ${schema.error}`
         : 'The database tables do not exist. Run supabase/migrations/0001_fullsend_init.sql in the Supabase SQL Editor.',
     );
+  }
+
+  /*
+   * Only meaningful once the tables exist — a database with no schema at all
+   * has already been reported, and repeating it as three problems reads as
+   * three separate faults.
+   */
+  if (schema.checked && schema.installed) {
+    if (publishingMigration.checked && !publishingMigration.applied) {
+      problems.push(
+        'The durable-publishing columns are missing. Run supabase/migrations/0003_durable_publishing.sql ' +
+          'in the Supabase SQL Editor — without it a publish whose response is lost cannot be ' +
+          'recovered, and a retry could post the same content twice.',
+      );
+    }
+    if (creativeStorage.checked && !creativeStorage.exists) {
+      problems.push(
+        `The "${env.supabase.storageBucket}" storage bucket does not exist. Run ` +
+          'supabase/migrations/0002_creative_storage.sql — Instagram fetches media from a public ' +
+          'URL, so nothing can be published without it.',
+      );
+    } else if (creativeStorage.checked && creativeStorage.exists && !creativeStorage.public) {
+      problems.push(
+        `The "${env.supabase.storageBucket}" bucket is not public. Instagram fetches media with no ` +
+          'session of ours, so a private bucket fails every publish.',
+      );
+    }
   }
 
   /*
@@ -229,6 +327,9 @@ export async function GET(): Promise<NextResponse> {
       required,
       supabase,
       schema,
+      /** Whether each migration beyond the initial schema is actually applied. */
+      migrations: { durablePublishing: publishingMigration },
+      creativeStorage,
       capabilities: capabilities(),
       problems,
       /** Anything that would fail a TikTok or Meta app review. */

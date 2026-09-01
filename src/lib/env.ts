@@ -18,9 +18,38 @@ function req(name: string): string {
   return v;
 }
 
+/**
+ * The public origin, and why it is not simply an environment variable.
+ *
+ * Every OAuth redirect URI is built from this. A production deployment missing
+ * `NEXT_PUBLIC_APP_URL` used to fall straight through to `http://localhost:3000`
+ * and send Meta a callback pointing at the founder's own machine — a
+ * development default silently overriding production, which is the one thing
+ * this value must never do.
+ *
+ * `VERCEL_PROJECT_PRODUCTION_URL` is the stable production domain, so it is the
+ * fallback that can actually be registered with Meta. `VERCEL_URL` changes
+ * every deploy and is only useful for previews. Localhost is last, and
+ * `appUrlIsLocal` lets the OAuth routes refuse rather than send it to a
+ * platform.
+ */
+function resolveAppUrl(): string {
+  const explicit = opt('NEXT_PUBLIC_APP_URL');
+  if (explicit) return explicit.replace(/\/+$/, '');
+  const production = opt('VERCEL_PROJECT_PRODUCTION_URL');
+  if (production) return `https://${production}`;
+  const deployment = opt('VERCEL_URL');
+  if (deployment) return `https://${deployment}`;
+  return 'http://localhost:3000';
+}
+
+const APP_URL = resolveAppUrl();
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
-  appUrl: opt('NEXT_PUBLIC_APP_URL') ?? 'http://localhost:3000',
+  appUrl: APP_URL,
+  /** True when the resolved origin is a developer machine, not a deployment. */
+  appUrlIsLocal: /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(APP_URL),
 
   /** `supabase` in production; `memory` runs the whole product in-process. */
   dbDriver: (opt('FULLSEND_DB_DRIVER') ?? (opt('SUPABASE_SERVICE_ROLE_KEY') ? 'supabase' : 'memory')) as

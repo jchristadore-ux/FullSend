@@ -37,6 +37,8 @@ export interface RepoBundle {
   meta: RepoMeta;
   signals: RepoSignals;
   screens: AppScreen[];
+  /** The commit this bundle describes. The identity of an analysis. */
+  commitSha: string | null;
 }
 
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg)$/i;
@@ -61,10 +63,11 @@ export async function ingestRepository(
   client = new GitHubClient(),
 ): Promise<RepoBundle> {
   const meta = await client.getRepo(ref);
-  const [languages, tree, readme] = await Promise.all([
+  const [languages, tree, readme, commitSha] = await Promise.all([
     client.getLanguages(ref),
     client.getTree(ref, meta.default_branch).catch(() => ({ entries: [], truncated: false })),
     client.getReadme(ref),
+    headSha(client, ref, meta.default_branch),
   ]);
 
   const files = tree.entries.filter((e) => e.type === 'blob' && !SKIP_DIR.test(e.path));
@@ -107,7 +110,28 @@ export async function ingestRepository(
     images: signals.repo_images.length,
   });
 
-  return { meta, signals, screens };
+  return { meta, signals, screens, commitSha };
+}
+
+/**
+ * The head commit, best effort.
+ *
+ * A client that cannot report it — an older stand-in, a token without the
+ * scope — leaves the analysis unkeyed rather than unrunnable. Not knowing
+ * which commit was analysed costs a re-analysis later; failing here would cost
+ * the analysis entirely.
+ */
+async function headSha(
+  client: GitHubClient,
+  ref: RepoRef,
+  branch: string,
+): Promise<string | null> {
+  if (typeof client.getHeadSha !== 'function') return null;
+  try {
+    return await client.getHeadSha(ref, branch);
+  } catch {
+    return null;
+  }
 }
 
 /* ── Manifests ──────────────────────────────────────────────────────────── */

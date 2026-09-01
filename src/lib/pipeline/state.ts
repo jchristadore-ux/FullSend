@@ -15,7 +15,7 @@ import 'server-only';
 import { type TenantScope } from '../db';
 import { db, getAnalysis, getBrandProfile, getStrategy } from '../db/repo';
 import { hasFailed, isStalled, stillRunning } from '../jobs/job-failure';
-import type { JobType, Project, Uuid } from '../types';
+import type { JobType, Project, ScheduledPost, Uuid } from '../types';
 
 export type StageName = 'analysis' | 'marketing_plan' | 'content' | 'schedule';
 
@@ -30,6 +30,24 @@ export interface Stage {
   error: string | null;
   /** True when this is the stage a retry should start from. */
   retryable: boolean;
+}
+
+/**
+ * What the publisher is actually doing, counted from the rows themselves.
+ *
+ * Publishing happens in the background now, so the screen that started it has
+ * no way to know how it went — and "the request returned 200" was never the
+ * same thing as "the post is on Instagram". Every number here is a count of
+ * persisted state, which is why a refresh cannot change it.
+ */
+export interface PublishingState {
+  published: number;
+  /** Queued or in flight: due, claimed, or mid-publish. */
+  inFlight: number;
+  /** Held for a person — a dead connection, or attempts exhausted. */
+  failed: number;
+  scheduled: number;
+  nextSendAt: string | null;
 }
 
 export interface PipelineState {
@@ -50,6 +68,8 @@ export interface PipelineState {
   currentStage: StageName | null;
   /** The stage a retry should resume from, if anything has failed. */
   failedStage: StageName | null;
+  /** Live publishing state, read from the database rather than assumed. */
+  publishing: PublishingState;
 }
 
 const LABELS: Record<StageName, string> = {
@@ -174,7 +194,50 @@ export async function pipelineState(
     });
   }
 
-  return { status: coarse(stages, failedStage), stages, currentStage, failedStage };
+  return {
+    status: coarse(stages, failedStage),
+    stages,
+    currentStage,
+    failedStage,
+    publishing: publishingState(scheduled, jobs),
+  };
+}
+
+function publishingState(
+  scheduled: ScheduledPost[],
+  jobs: { type: JobType; status: string; payload: Record<string, unknown> }[],
+): PublishingState {
+  const claimed = new Set(
+    jobs
+      .filter((j) => j.type === 'publish_post' && (j.status === 'queued' || j.status === 'running'))
+      .map((j) => String(j.payload.scheduledPostId ?? '')),
+  );
+
+  let published = 0;
+  let failed = 0;
+  let inFlight = 0;
+  let waiting = 0;
+  let nextSendAt: string | null = null;
+
+  for (const post of scheduled) {
+    if (post.status === 'published') {
+      published++;
+      continue;
+    }
+    if (post.status === 'failed') {
+      failed++;
+      continue;
+    }
+    // "Publishing" or a job already holding it: work genuinely under way.
+    if (post.status === 'publishing' || claimed.has(post.id)) {
+      inFlight++;
+      continue;
+    }
+    waiting++;
+    if (!nextSendAt || post.scheduled_for < nextSendAt) nextSendAt = post.scheduled_for;
+  }
+
+  return { published, inFlight, failed, scheduled: waiting, nextSendAt };
 }
 
 function coarse(stages: Stage[], failedStage: StageName | null): PipelineState['status'] {

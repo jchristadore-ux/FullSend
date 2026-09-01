@@ -80,13 +80,38 @@ export async function analyzeProduct(
   const repository = opts.refresh ? null : await getRepository(scope, project.id);
   const analysis = opts.refresh ? null : await getAnalysis(scope, project.id);
 
-  if (repository && analysis && analysis.repository_id === repository.id) {
-    log.info('reusing the existing product analysis', { project: project.id });
-    return { repository, analysis, costUsd: 0, ran: { ingest: false, analysis: false } };
-  }
-
   const ref = parseRepoInput(repositoryInput);
   const client = opts.client ?? new GitHubClient(opts.githubToken);
+
+  if (repository && analysis && analysis.repository_id === repository.id) {
+    /*
+     * An analysis is identified by the commit it was derived from.
+     *
+     * The same commit always describes the same product, so a refreshed page,
+     * a retried job or a second press of Analyze must never pay for it again.
+     * A commit that has moved on is a different product to understand, and
+     * gets its own version rather than overwriting the old one.
+     *
+     * When the head cannot be read — no token, GitHub unreachable, a client
+     * that cannot report it — the saved analysis is reused. Not knowing is a
+     * reason to keep what is on disk, never to spend on a fresh one.
+     */
+    const head = await headCommit(client, ref, repository.default_branch);
+    const sameCommit = !head || !analysis.commit_sha || analysis.commit_sha === head;
+    if (sameCommit) {
+      log.info('reusing the existing product analysis', {
+        project: project.id,
+        commit: analysis.commit_sha ?? 'unknown',
+      });
+      return { repository, analysis, costUsd: 0, ran: { ingest: false, analysis: false } };
+    }
+    log.info('repository has moved on; analysing the new commit', {
+      project: project.id,
+      from: analysis.commit_sha,
+      to: head,
+    });
+  }
+
   log.info('analysing repository', { project: project.id, repo: `${ref.owner}/${ref.name}` });
 
   const bundle = await ingestRepository(ref, client);
@@ -126,6 +151,20 @@ export async function analyzeRepository(
   };
 }
 
+/** The head commit, or null when it cannot be read. Never throws. */
+async function headCommit(
+  client: GitHubClient,
+  ref: { owner: string; name: string },
+  branch: string,
+): Promise<string | null> {
+  if (typeof client.getHeadSha !== 'function') return null;
+  try {
+    return await client.getHeadSha(ref, branch);
+  } catch {
+    return null;
+  }
+}
+
 async function upsertRepository(
   scope: TenantScope,
   projectId: Uuid,
@@ -144,6 +183,7 @@ async function upsertRepository(
     topics: meta.topics,
     stars: meta.stargazers_count,
     is_private: meta.private,
+    commit_sha: bundle.commitSha,
     last_indexed_at: nowIso(),
   };
   if (existing) return db().update(scope, 'repositories', existing.id, patch);
@@ -222,6 +262,9 @@ async function runAnalysis(
       homepage: bundle.signals.homepage,
       file_count: bundle.signals.file_count,
     },
+    // The commit this understanding was derived from. The same commit is never
+    // analysed twice; a different one is a new version rather than an edit.
+    commit_sha: bundle.commitSha,
     created_at: nowIso(),
   });
 

@@ -19,7 +19,7 @@ import {
 } from './helpers';
 import { analyzeRepository } from '@/lib/analysis/analyze';
 import { approveStrategy, buildStrategy, ensureBrandProfile } from '@/lib/strategy/build';
-import { generateContent } from '@/lib/content/generate';
+import { CONTENT_BATCH_SIZE, generateContent } from '@/lib/content/generate';
 import { openSlots, queueDepth, scheduleContent } from '@/lib/scheduler/schedule';
 import { publishScheduledPost } from '@/lib/publish/publish';
 import { collectAnalytics, postPerformance, summarise } from '@/lib/analytics/collect';
@@ -99,7 +99,19 @@ describe('FullSend end-to-end chain', () => {
       slots: slots.slice(0, 12),
     });
 
-    expect(generated.created.length).toBeGreaterThan(5);
+    /*
+     * One call writes one batch, and every brief in that batch is accounted
+     * for — written, or rejected by the duplicate guard. Twelve slots go in;
+     * the six the batch did not reach come back as work for the next job,
+     * which is what stops "thirty posts" from ever being one request.
+     *
+     * The old assertion here was `> 5`, which quietly required all six briefs
+     * to survive the similarity check and failed whenever one legitimately
+     * did not.
+     */
+    expect(generated.created.length + generated.rejectedDuplicates).toBe(CONTENT_BATCH_SIZE);
+    expect(generated.remainingSlots).toBe(12 - CONTENT_BATCH_SIZE);
+    expect(generated.created.length).toBeGreaterThan(3);
     for (const item of generated.created) {
       expect(item.hook.length).toBeGreaterThan(3);
       expect(item.caption.length).toBeGreaterThan(10);
@@ -228,7 +240,10 @@ describe('FullSend end-to-end chain', () => {
     const before = await db().count(ctx.scope, 'content_items', {
       where: { project_id: project.id },
     });
-    const topUp = await topUpContent(ctx.scope, project, 14, 'More of what is working');
+    // The 14-day window is legitimately full by now — every slot in it already
+    // has a post written for it — so the top-up extends the horizon, which is
+    // exactly what autopilot does when runway gets short.
+    const topUp = await topUpContent(ctx.scope, project, 60, 'More of what is working');
     const after = await db().count(ctx.scope, 'content_items', {
       where: { project_id: project.id },
     });

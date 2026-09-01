@@ -21,7 +21,7 @@ const tiktok = new TikTokAdapter();
 /** Test-only override, installed by the suite. */
 let mockRegistry: Map<Platform, MockAdapter> | null = null;
 
-export function useMockAdapters(): Map<Platform, MockAdapter> {
+export function installMockAdapters(): Map<Platform, MockAdapter> {
   mockRegistry = new Map([
     ['instagram', new MockAdapter('instagram')],
     ['tiktok', new MockAdapter('tiktok', {

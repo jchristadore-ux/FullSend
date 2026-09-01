@@ -3,7 +3,6 @@ import { projectRoute } from '@/lib/api/handler';
 import { db, enqueue, listRecommendations } from '@/lib/db/repo';
 import { notFound } from '@/lib/errors';
 import { applyRecommendation, dismissRecommendation } from '@/lib/optimizer/optimize';
-import { topUpContent } from '@/lib/automation/autopilot';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -34,20 +33,17 @@ export const POST = projectRoute(
 
     const applied = await applyRecommendation(session.scope, project, rec, false);
 
-    if (rec.action.type === 'generate_content') {
-      const result = await topUpContent(session.scope, project, 14, rec.action.brief, 'optimizer');
-      return {
-        recommendation: await db().get(session.scope, 'recommendations', rec.id),
-        applied,
-        generated: result.generated,
-      };
-    }
-
-    // A mix or cadence change only shows up once new content is planned against it.
+    /*
+     * Applying a recommendation queues the writing; it never does it here.
+     * Generation is several AI calls, and running them inside this request is
+     * what made "DO IT" a button that could time out and lose the work. The
+     * job survives the response, so the browser is free to go anywhere.
+     */
+    const brief = rec.action.type === 'generate_content' ? rec.action.brief : undefined;
     const job = await enqueue(
       session.scope,
       'generate_content',
-      { projectId: project.id, days: 14, origin: 'optimizer' },
+      { projectId: project.id, days: 14, origin: 'optimizer', ...(brief ? { brief } : {}) },
       { projectId: project.id },
     );
 

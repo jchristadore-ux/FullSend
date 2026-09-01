@@ -3,6 +3,7 @@ import { createProject, fakeGitHubClient, setupContext, teardown, type TestConte
 import { analyzeRepository, screenshotAvailability } from '@/lib/analysis/analyze';
 import { detectRoutes, extractUiElements, ingestRepository } from '@/lib/github/ingest';
 import { parseRepoInput } from '@/lib/github/client';
+import { db } from '@/lib/db/repo';
 import { FullSendError } from '@/lib/errors';
 import type { Project } from '@/lib/types';
 
@@ -119,6 +120,64 @@ describe('product understanding', () => {
     expect(a.tech_stack).toContain('Next.js');
     expect(a.confidence).toBeGreaterThan(0);
     expect(a.confidence).toBeLessThanOrEqual(1);
+  });
+
+  it('keys the analysis to the commit it was derived from', async () => {
+    const result = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
+      client: fakeGitHubClient(),
+    });
+    expect(result.analysis.commit_sha).toBe('a1b2c3d4e5f60718293a4b5c6d7e8f9012345678');
+    expect(result.repository.commit_sha).toBe(result.analysis.commit_sha);
+  });
+
+  it('never analyses the same commit twice', async () => {
+    const first = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
+      client: fakeGitHubClient(),
+    });
+    const again = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
+      client: fakeGitHubClient(),
+    });
+
+    expect(again.analysis.id).toBe(first.analysis.id);
+    expect(again.ran).toEqual({ ingest: false, analysis: false });
+    expect(again.costUsd).toBe(0);
+
+    const versions = await db().find(ctx.scope, 'product_analysis', {
+      where: { project_id: project.id },
+    });
+    expect(versions).toHaveLength(1);
+  });
+
+  it('understands the product again when the repository has moved on', async () => {
+    const first = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
+      client: fakeGitHubClient(),
+    });
+
+    const moved = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
+      client: fakeGitHubClient({ commitSha: 'ffffffffffffffffffffffffffffffffffffffff' }),
+    });
+
+    // A new version, not an edit: the old understanding is still on disk.
+    expect(moved.analysis.id).not.toBe(first.analysis.id);
+    expect(moved.analysis.commit_sha).toBe('ffffffffffffffffffffffffffffffffffffffff');
+    const versions = await db().find(ctx.scope, 'product_analysis', {
+      where: { project_id: project.id },
+    });
+    expect(versions).toHaveLength(2);
+  });
+
+  it('keeps what it has when the head commit cannot be read', async () => {
+    // No token, GitHub down, an older client: not knowing is a reason to keep
+    // the saved analysis, never to pay a model for a fresh one.
+    const first = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
+      client: fakeGitHubClient(),
+    });
+    const again = await analyzeRepository(ctx.scope, project, 'acme/taskflow', {
+      client: fakeGitHubClient({ commitSha: null }),
+    });
+
+    expect(again.analysis.id).toBe(first.analysis.id);
+    expect(again.costUsd).toBe(0);
   });
 
   it('reports screenshot availability honestly', async () => {

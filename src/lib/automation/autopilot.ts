@@ -23,6 +23,7 @@ import { systemScope, type TenantScope } from '../db';
 import {
   db,
   dueScheduledPosts,
+  enqueueOnce,
   getAnalysis,
   getBrandProfile,
   getSettings,
@@ -41,11 +42,11 @@ import { generateContent } from '../content/generate';
 import { blocker, type GenerationBlocker } from '../content/blockers';
 import { runQualityControl, canAutoPublish } from '../qc/check';
 import { openSlots, queueDepth, scheduleContent } from '../scheduler/schedule';
-import { publishScheduledPost, resumeAfterReconnect } from '../publish/publish';
+import { resumeAfterReconnect } from '../publish/publish';
 import { collectAnalytics } from '../analytics/collect';
 import { optimize } from '../optimizer/optimize';
 import { scanTrends } from '../trends/scan';
-import type { AutomationRun, AutomationStep, ContentItem, Platform, Project } from '../types';
+import type { AutomationRun, AutomationStep, ContentItem, Platform, Project, ScheduledPost } from '../types';
 
 const log = logger('autopilot');
 
@@ -55,7 +56,12 @@ const TOPUP_WINDOW_DAYS = 14;
 
 export interface AutopilotResult {
   run: AutomationRun;
-  published: number;
+  /**
+   * Posts handed to the publisher as durable jobs. The loop no longer waits on
+   * Instagram itself, so this counts what it queued — not what went live,
+   * which is the publisher's own record to keep.
+   */
+  queuedToPublish: number;
   generated: number;
   scheduled: number;
   errors: number;
@@ -80,7 +86,7 @@ export async function runDailyAutopilot(projectId: string): Promise<AutopilotRes
     summary: null,
   });
 
-  let published = 0;
+  let queuedToPublish = 0;
   let generated = 0;
   let scheduled = 0;
   let errors = 0;
@@ -121,7 +127,7 @@ export async function runDailyAutopilot(projectId: string): Promise<AutopilotRes
       steps: [{ name: 'Paused', status: 'skipped', detail: 'Project is paused', duration_ms: 0 }],
       summary: 'Project is paused — autopilot took no action.',
     });
-    return { run, published: 0, generated: 0, scheduled: 0, errors: 0 };
+    return { run, queuedToPublish: 0, generated: 0, scheduled: 0, errors: 0 };
   }
 
   /* 1. Connections. */
@@ -182,21 +188,27 @@ export async function runDailyAutopilot(projectId: string): Promise<AutopilotRes
     };
   });
 
-  /* 5. Publish anything due. */
+  /* 5. Publish anything due — as jobs, one post each. */
   await step('Publish scheduled content', async () => {
-    const due = await dueScheduledPosts(scope, nowIso(), 25);
+    const due = await dueScheduledPosts(scope, nowIso(), 50);
     const mine = due.filter((p) => p.project_id === projectId);
     if (mine.length === 0) return { detail: 'Nothing due right now', skipped: true };
 
-    let ok = 0;
-    let held = 0;
+    let queued = 0;
     for (const post of mine) {
-      const outcome = await publishScheduledPost(scope, post.id);
-      if (outcome.status === 'published') ok++;
-      else held++;
+      if (post.next_attempt_at && Date.parse(post.next_attempt_at) > Date.now()) continue;
+      const { created } = await enqueueOnce(
+        scope,
+        'publish_post',
+        { scheduledPostId: post.id, projectId, idempotencyKey: post.id },
+        { projectId, dedupeKey: post.id },
+      );
+      if (created) queued++;
     }
-    published += ok;
-    return { detail: `${ok} published, ${held} held or retrying` };
+    queuedToPublish += queued;
+    // Each of these is its own durable job, published one per worker pass. The
+    // daily loop never waits on Instagram itself.
+    return { detail: `${queued} post(s) queued to publish`, skipped: queued === 0 };
   });
 
   /* 6. Analytics. */
@@ -266,7 +278,7 @@ export async function runDailyAutopilot(projectId: string): Promise<AutopilotRes
     errors === 0 ? 'succeeded' : errors < steps.length ? 'partial' : 'failed';
 
   const summary =
-    `Published ${published}, generated ${generated}, scheduled ${scheduled}` +
+    `Queued ${queuedToPublish} to publish, generated ${generated}, scheduled ${scheduled}` +
     (errors ? `, ${errors} step(s) had problems` : '');
 
   run = await db().update(scope, 'automation_runs', run.id, {
@@ -279,11 +291,11 @@ export async function runDailyAutopilot(projectId: string): Promise<AutopilotRes
   await db().update(scope, 'projects', projectId, {
     last_autopilot_run_at: nowIso(),
     updated_at: nowIso(),
-    status: published > 0 || scheduled > 0 ? 'live' : project.status,
+    status: queuedToPublish > 0 || scheduled > 0 ? 'live' : project.status,
   });
 
-  log.info('autopilot run complete', { projectId, status, published, generated, scheduled, errors });
-  return { run, published, generated, scheduled, errors };
+  log.info('autopilot run complete', { projectId, status, queuedToPublish, generated, scheduled, errors });
+  return { run, queuedToPublish, generated, scheduled, errors };
 }
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */
@@ -293,6 +305,8 @@ interface TopUpResult {
   rejectedDuplicates: number;
   blockedByQc: number;
   reason: string;
+  /** Slots in the window still waiting to be written. Drives the next batch. */
+  remainingSlots: number;
   /** Set when the run could not start. Absent when it ran and simply found nothing. */
   blocker?: GenerationBlocker;
 }
@@ -359,11 +373,12 @@ export async function topUpContent(
   brief?: string,
   origin: ContentItem['origin'] = 'autopilot',
 ): Promise<TopUpResult> {
-  const empty = (reason: string): TopUpResult => ({
+  const empty = (reason: string, remainingSlots = 0): TopUpResult => ({
     generated: 0,
     rejectedDuplicates: 0,
     blockedByQc: 0,
     reason,
+    remainingSlots,
   });
 
   // One check, shared with the calendar page, so the button and the page can
@@ -412,6 +427,7 @@ export async function topUpContent(
     rejectedDuplicates: result.rejectedDuplicates,
     blockedByQc: result.blockedByQc,
     reason: result.created.length ? 'Generated' : 'Nothing new passed the duplicate check',
+    remainingSlots: result.remainingSlots,
   };
 }
 
@@ -485,26 +501,65 @@ export async function projectsForAutopilot(): Promise<Project[]> {
   );
 }
 
-/** Publishing runs on its own faster cadence than the full daily loop. */
-export async function publishDuePosts(limit = 25): Promise<{ published: number; failed: number }> {
+/**
+ * Turns every due post into its own durable job.
+ *
+ * This sweep used to publish inline — up to forty posts, each of which waits
+ * on Meta transcoding a video, inside one HTTP request. That is the shape that
+ * gets killed half-way through, and the half that ran left `publishing` rows
+ * nobody would look at again. Now the sweep only writes jobs; the worker
+ * publishes one post per pass, and a post that fails takes nothing else down
+ * with it.
+ */
+export async function enqueueDuePublishJobs(
+  limit = 50,
+): Promise<{ due: number; queued: number; recovered: number }> {
   const scope = systemScope('publish sweep');
   const due = await dueScheduledPosts(scope, nowIso(), limit);
-  let publishedCount = 0;
-  let failed = 0;
+  const stranded = await strandedPublishes(scope);
+  let queued = 0;
 
-  for (const post of due) {
-    // A post held for a manual retry window is not due yet.
+  for (const post of [...due, ...stranded]) {
+    // A post held for a backoff window is not due yet.
     if (post.next_attempt_at && Date.parse(post.next_attempt_at) > Date.now()) continue;
-    try {
-      const outcome = await publishScheduledPost(scope, post.id);
-      if (outcome.status === 'published') publishedCount++;
-      else failed++;
-    } catch (e) {
-      failed++;
-      log.error('publish sweep error', { postId: post.id, error: String(e) });
-    }
+    const { created } = await enqueueOnce(
+      scope,
+      'publish_post',
+      { scheduledPostId: post.id, projectId: post.project_id, idempotencyKey: post.id },
+      { projectId: post.project_id, dedupeKey: post.id },
+    );
+    if (created) queued++;
   }
-  return { published: publishedCount, failed };
+
+  if (queued) log.info('publish jobs queued', { due: due.length, stranded: stranded.length, queued });
+  return { due: due.length, queued, recovered: stranded.length };
+}
+
+/**
+ * How long a post may sit mid-publish before it is treated as abandoned.
+ *
+ * Comfortably beyond a worker's lease, so a post another worker is genuinely
+ * holding is never taken from it. Re-publishing is safe regardless — the
+ * publisher asks Instagram whether the attempt already went live before it
+ * tries again — but taking the post back early would still mean two workers
+ * doing the same work.
+ */
+const STRANDED_PUBLISH_MS = 15 * 60_000;
+
+/**
+ * Posts left mid-publish by a worker that never came back.
+ *
+ * `publishing` is not a state anything sweeps up otherwise: the post is not
+ * due (its slot has passed) and not failed (nothing recorded a failure), so
+ * without this it would sit there indefinitely, showing as going out.
+ */
+async function strandedPublishes(scope: TenantScope): Promise<ScheduledPost[]> {
+  const cutoff = new Date(Date.now() - STRANDED_PUBLISH_MS).toISOString();
+  const publishing = await db().find(scope, 'scheduled_posts', {
+    where: { status: 'publishing' },
+    limit: 50,
+  });
+  return publishing.filter((p) => (p.started_at ?? p.created_at) < cutoff);
 }
 
 /** Used by the "check my connections" button and the health cron. */

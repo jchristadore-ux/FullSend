@@ -1,9 +1,8 @@
 import { LIMITS, route } from '@/lib/api/handler';
 import { z } from 'zod';
-import { audit, db, getProject } from '@/lib/db/repo';
+import { audit, db, enqueueOnce, getProject } from '@/lib/db/repo';
 import { FullSendError, notFound } from '@/lib/errors';
 import { nowIso } from '@/lib/ids';
-import { publishScheduledPost } from '@/lib/publish/publish';
 import { scheduleContent } from '@/lib/scheduler/schedule';
 
 export const runtime = 'nodejs';
@@ -56,8 +55,37 @@ export const POST = route(
       }));
 
     if (body.publishNow && scheduledPost) {
-      const outcome = await publishScheduledPost(session.scope, scheduledPost.id);
-      return { content: approved, published: outcome };
+      /*
+       * "Send it now" queues the publish; it does not perform it.
+       *
+       * Publishing waits on Meta transcoding the media, which can outlast the
+       * request — and a browser that navigates away mid-publish used to leave
+       * a post stuck in `publishing` with no job to finish it. The job owns it
+       * now, so closing the tab makes no difference to whether the post goes
+       * out. The dedupe key is the scheduled post itself, so pressing the
+       * button twice cannot queue it twice.
+       */
+      await db().update(session.scope, 'scheduled_posts', scheduledPost.id, {
+        scheduled_for: nowIso(),
+        status: 'scheduled',
+        next_attempt_at: null,
+      });
+      const { job } = await enqueueOnce(
+        session.scope,
+        'publish_post',
+        {
+          scheduledPostId: scheduledPost.id,
+          projectId: project.id,
+          idempotencyKey: scheduledPost.id,
+        },
+        { projectId: project.id, dedupeKey: scheduledPost.id },
+      );
+      return {
+        content: approved,
+        scheduled: scheduledPost,
+        publishJobId: job.id,
+        publishStatus: job.status,
+      };
     }
 
     return { content: approved, scheduled: scheduledPost };

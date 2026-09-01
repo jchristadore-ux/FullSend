@@ -10,7 +10,7 @@ import { db } from '@/lib/db/repo';
 import { newId, nowIso } from '@/lib/ids';
 import { clearCache } from '@/lib/ai/cache';
 import { setProvider } from '@/lib/ai/client';
-import { clearMockAdapters, useMockAdapters } from '@/lib/social/registry';
+import { clearMockAdapters, installMockAdapters } from '@/lib/social/registry';
 import { completeConnection } from '@/lib/social/connections';
 import type { MockAdapter } from '@/lib/social/mock';
 import { resetLimits } from '@/lib/rate-limit';
@@ -46,7 +46,7 @@ export async function createUser(email = 'founder@example.com'): Promise<User> {
 
 export async function setupContext(email?: string): Promise<TestContext> {
   const store = freshStore();
-  const adapters = useMockAdapters();
+  const adapters = installMockAdapters();
   const user = await createUser(email);
   return { store, user, scope: userScope(user.id), adapters };
 }
@@ -129,6 +129,9 @@ export function fakeGitHubClient(overrides: Partial<FakeRepo> = {}): GitHubClien
     async getViewer() {
       return { login: repo.owner, avatar_url: '' };
     },
+    async getHeadSha() {
+      return repo.commitSha;
+    },
   } as unknown as GitHubClient;
 }
 
@@ -140,11 +143,14 @@ interface FakeRepo {
   topics: string[];
   readme: string | null;
   files: { path: string; content?: string; size?: number }[];
+  /** The head commit this stand-in reports. Null models a repo we cannot key. */
+  commitSha: string | null;
 }
 
 const DEFAULT_REPO: FakeRepo = {
   owner: 'acme',
   name: 'taskflow',
+  commitSha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
   description: 'Turn messy team chatter into a clean task list, automatically.',
   homepage: 'https://taskflow.example.com',
   topics: ['productivity', 'tasks', 'ai'],

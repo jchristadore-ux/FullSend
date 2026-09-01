@@ -7,9 +7,10 @@
  * external database, which is how the E2E chain is exercised in CI.
  */
 
-import { forbidden, notFound } from '../errors';
+import { forbidden, FullSendError, notFound } from '../errors';
 import type { Job, Project, Uuid } from '../types';
 import {
+  type ClaimOptions,
   type QueryOptions,
   type Store,
   type TableName,
@@ -19,6 +20,20 @@ import {
 } from './store';
 
 type Row = Record<string, unknown> & { id: Uuid };
+
+/**
+ * The unique indexes the migration declares, mirrored here.
+ *
+ * These are not decoration in Postgres — they are the last thing standing
+ * between two racing workers and the same post published twice, or the same
+ * idea written twice. A memory driver that let those through would agree with
+ * production right up to the moment it mattered, so the tests would prove
+ * nothing about the constraint they most rely on.
+ */
+const UNIQUE_INDEXES: Partial<Record<TableName, string[][]>> = {
+  published_posts: [['scheduled_post_id'], ['platform', 'external_id']],
+  content_items: [['project_id', 'dedup_hash']],
+};
 
 export class MemoryStore implements Store {
   private tables = new Map<TableName, Map<Uuid, Row>>();
@@ -68,8 +83,29 @@ export class MemoryStore implements Store {
   ): Promise<Tables[K]> {
     const r = row as unknown as Row;
     await this.assertAccess(scope, table, r);
+    this.assertUnique(table, r);
     this.table(table).set(r.id, structuredClone(r));
     return structuredClone(row);
+  }
+
+  /** Refuses a row that would collide on a declared unique index. */
+  private assertUnique(table: TableName, row: Row): void {
+    const indexes = UNIQUE_INDEXES[table];
+    if (!indexes) return;
+    for (const columns of indexes) {
+      // A null in any column means the row is outside the index, as in Postgres.
+      if (columns.some((c) => row[c] === null || row[c] === undefined)) continue;
+      for (const existing of this.table(table).values()) {
+        if (existing.id === row.id) continue;
+        if (columns.every((c) => existing[c] === row[c])) {
+          throw new FullSendError(
+            'unique_violation',
+            `A ${table} row with the same ${columns.join(' + ')} already exists`,
+            { status: 409, retryable: false },
+          );
+        }
+      }
+    }
   }
 
   async insertMany<K extends TableName>(
@@ -214,8 +250,9 @@ export class MemoryStore implements Store {
   async claimNextJob(
     now: string,
     lockTimeoutMs: number,
-    projectId?: Uuid | null,
+    opts: ClaimOptions = {},
   ): Promise<Job | null> {
+    const { projectId, createdBefore } = opts;
     // Serialise claims so two concurrent workers cannot take the same job.
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
@@ -229,6 +266,7 @@ export class MemoryStore implements Store {
         .filter(
           (j) =>
             (!projectId || j.project_id === projectId) &&
+            (!createdBefore || j.created_at <= createdBefore) &&
             ((j.status === 'queued' && j.run_after <= now) ||
               (j.status === 'running' && j.locked_at !== null && j.locked_at < staleBefore)),
         )

@@ -177,6 +177,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  // eslint-disable-next-line no-console
   console.log(`GitHub fixture serving ${OWNER}/${REPO} on http://localhost:${PORT}`);
 });

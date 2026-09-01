@@ -29,6 +29,8 @@ export interface CollectionResult {
   postsCollected: number;
   accountsCollected: number;
   errors: { platform: Platform; message: string }[];
+  /** Active posts this pass did not reach. Collected on a later one. */
+  remaining: number;
 }
 
 /**
@@ -37,17 +39,42 @@ export interface CollectionResult {
  */
 const ACTIVE_WINDOW_DAYS = 30;
 
+/**
+ * Posts per collection pass.
+ *
+ * One insights call per post, and a busy account can have two hundred posts
+ * inside the active window — which is a job that spends minutes waiting on
+ * Meta and gets killed part-way. Bounded here, and the pass takes the
+ * least-recently-collected posts first, so everything is covered in turn
+ * rather than the same twenty-five every time.
+ */
+const POSTS_PER_PASS = 25;
+
 export async function collectAnalytics(
   scope: TenantScope,
   projectId: Uuid,
 ): Promise<CollectionResult> {
-  const result: CollectionResult = { postsCollected: 0, accountsCollected: 0, errors: [] };
+  const result: CollectionResult = {
+    postsCollected: 0,
+    accountsCollected: 0,
+    errors: [],
+    remaining: 0,
+  };
   const published = await listPublished(scope, projectId, 200);
   const cutoff = Date.now() - ACTIVE_WINDOW_DAYS * 86_400_000;
   const active = published.filter((p) => Date.parse(p.published_at) >= cutoff);
 
+  // Oldest reading first, never-read posts before that. A bounded pass covers
+  // everything in rotation instead of starving the tail of a busy account.
+  const lastRead = await lastCollectedByPost(scope, projectId);
+  const ordered = [...active].sort(
+    (a, b) => (lastRead.get(a.id) ?? 0) - (lastRead.get(b.id) ?? 0),
+  );
+  const batch = ordered.slice(0, POSTS_PER_PASS);
+  result.remaining = Math.max(0, ordered.length - batch.length);
+
   const byPlatform = new Map<Platform, PublishedPost[]>();
-  for (const post of active) {
+  for (const post of batch) {
     const list = byPlatform.get(post.platform) ?? [];
     list.push(post);
     byPlatform.set(post.platform, list);
@@ -114,9 +141,26 @@ export async function collectAnalytics(
     projectId,
     posts: result.postsCollected,
     accounts: result.accountsCollected,
+    remaining: result.remaining,
     errors: result.errors.length,
   });
   return result;
+}
+
+/** When each post's metrics were last read. Missing means never. */
+async function lastCollectedByPost(
+  scope: TenantScope,
+  projectId: Uuid,
+): Promise<Map<Uuid, number>> {
+  const snapshots = await listAnalytics(scope, projectId, { scopeKind: 'post' });
+  const seen = new Map<Uuid, number>();
+  for (const snap of snapshots) {
+    if (!snap.published_post_id) continue;
+    const at = Date.parse(snap.collected_at);
+    const known = seen.get(snap.published_post_id);
+    if (known === undefined || at > known) seen.set(snap.published_post_id, at);
+  }
+  return seen;
 }
 
 /** The latest snapshot per post — earlier snapshots are history, not truth. */

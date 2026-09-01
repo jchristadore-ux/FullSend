@@ -141,6 +141,13 @@ export interface QueryOptions<T> {
   offset?: number;
 }
 
+/** Bounds on which job a worker pass is allowed to take. */
+export interface ClaimOptions {
+  projectId?: Uuid | null;
+  /** Only claim jobs created at or before this instant. */
+  createdBefore?: string | null;
+}
+
 export interface Store {
   insert<K extends TableName>(scope: TenantScope, table: K, row: Tables[K]): Promise<Tables[K]>;
   insertMany<K extends TableName>(
@@ -178,8 +185,17 @@ export interface Store {
   /**
    * Claims the next runnable job atomically. Two workers must never get the
    * same job — the Supabase driver does this with a conditional update.
+   *
+   * `createdBefore` bounds the claim to jobs that already existed at a given
+   * instant. A worker pass uses it so the successor a job enqueues is left for
+   * the next pass rather than followed inside this one, which is what keeps a
+   * four-stage AI chain from running end-to-end in a single invocation.
    */
-  claimNextJob(now: string, lockTimeoutMs: number, projectId?: Uuid | null): Promise<Job | null>;
+  claimNextJob(
+    now: string,
+    lockTimeoutMs: number,
+    opts?: ClaimOptions,
+  ): Promise<Job | null>;
 
   reset?(): Promise<void>;
 }

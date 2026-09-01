@@ -12,6 +12,7 @@ import { env } from '../env';
 import { forbidden, FullSendError, notFound } from '../errors';
 import type { Job, Uuid } from '../types';
 import {
+  type ClaimOptions,
   type QueryOptions,
   type Store,
   type TableName,
@@ -140,7 +141,6 @@ export class SupabaseStore implements Store {
     };
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private applyScope(query: any, filter: ScopeFilter): any {
     if (filter.kind === 'eq') return query.eq(filter.column, filter.value);
     if (filter.kind === 'in') return query.in(filter.column, filter.values);
@@ -305,8 +305,9 @@ export class SupabaseStore implements Store {
   async claimNextJob(
     now: string,
     lockTimeoutMs: number,
-    projectId?: Uuid | null,
+    opts: ClaimOptions = {},
   ): Promise<Job | null> {
+    const { projectId, createdBefore } = opts;
     const staleBefore = new Date(Date.parse(now) - lockTimeoutMs).toISOString();
     for (let attempt = 0; attempt < 5; attempt++) {
       let query = this.client
@@ -317,12 +318,13 @@ export class SupabaseStore implements Store {
             `and(status.eq.running,locked_at.lt.${staleBefore})`,
         );
       if (projectId) query = query.eq('project_id', projectId);
+      if (createdBefore) query = query.lte('created_at', createdBefore);
       const { data, error } = await query.order('run_after', { ascending: true }).limit(1);
       if (error) throw this.wrap(error, 'jobs');
       const candidate = (data ?? [])[0] as Job | undefined;
       if (!candidate) return null;
 
-      const { data: claimed, error: claimErr } = await this.client
+      let claim = this.client
         .from('jobs')
         .update({
           status: 'running',
@@ -337,10 +339,22 @@ export class SupabaseStore implements Store {
               : candidate.last_error,
         })
         .eq('id', candidate.id)
-        .eq('status', candidate.status)
-        .is('locked_at', candidate.locked_at)
-        .select()
-        .maybeSingle();
+        .eq('status', candidate.status);
+      /*
+       * The lock is part of the compare-and-set, so a worker that reclaims a
+       * stale job loses harmlessly to whoever got there first.
+       *
+       * `.is()` is only valid against null, true and false. Passing it a
+       * timestamp builds `locked_at=is.2026-01-01T00:00:00Z`, which PostgREST
+       * rejects outright — so every reclaim of a dead worker's job threw
+       * instead of recovering it, which is precisely the case this exists for.
+       */
+      claim =
+        candidate.locked_at === null
+          ? claim.is('locked_at', null)
+          : claim.eq('locked_at', candidate.locked_at);
+
+      const { data: claimed, error: claimErr } = await claim.select().maybeSingle();
       if (claimErr) throw this.wrap(claimErr, 'jobs');
       if (claimed) return claimed as Job;
       // Lost the race; look for the next one.

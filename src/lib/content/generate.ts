@@ -31,17 +31,26 @@ Non-negotiable:
 Return JSON only.`;
 
 export interface GenerateContentInput { project: Project; analysis: ProductAnalysis; brand: BrandProfile; strategy: MarketingStrategy; personas: Persona[]; pillars: ContentPillar[]; campaigns: Campaign[]; slots: Slot[]; origin?: ContentItem['origin']; brief?: string; }
-export interface GenerateContentResult { created: ContentItem[]; rejectedDuplicates: number; blockedByQc: number; costUsd: number; }
-const BATCH_SIZE = 6;
+export interface GenerateContentResult { created: ContentItem[]; rejectedDuplicates: number; blockedByQc: number; costUsd: number; /** Slots this call did not reach. The next job picks them up. */ remainingSlots: number; }
+/**
+ * Posts per AI call, and per durable job.
+ *
+ * Thirty posts are never one request. Six is small enough that a batch fits
+ * comfortably inside a single model response and a single worker pass, and
+ * each item is written to the database as it is produced — so a batch that
+ * fails half-way keeps the posts it already wrote, and only the rest is retried.
+ */
+export const CONTENT_BATCH_SIZE = 6;
 
 export async function generateContent(scope: TenantScope, input: GenerateContentInput): Promise<GenerateContentResult> {
   const { project, analysis, brand, strategy, personas, pillars, campaigns, slots } = input;
-  if (slots.length === 0) return { created: [], rejectedDuplicates: 0, blockedByQc: 0, costUsd: 0 };
+  if (slots.length === 0) return { created: [], rejectedDuplicates: 0, blockedByQc: 0, costUsd: 0, remainingSlots: 0 };
   const settings = await getSettings(scope, project.id); const existing = await listContent(scope, project.id);
   const seen = existing.map((c) => ({ id: c.id, platform: c.platform, hook: c.hook, caption: c.caption, dedup_hash: c.dedup_hash }));
   const recent = existing.slice(-30).map((c) => ({ hook: c.hook, caption: c.caption }));
   const created: ContentItem[] = []; let rejectedDuplicates = 0; let blockedByQc = 0; let costUsd = 0;
-  const batch = slots.slice(0, BATCH_SIZE);
+  const batch = slots.slice(0, CONTENT_BATCH_SIZE);
+  const remainingSlots = Math.max(0, slots.length - batch.length);
   const briefs = batch.map((slot, i) => { const pillar = pickPillar(pillars, slot.pillarType); const campaign = pickCampaign(campaigns, slot.at); const persona = personas[i % Math.max(1, personas.length)]; return { seed: `${project.id}:${slot.at.toISOString()}:instagram`, platform: 'instagram', format: slot.format, pillar_type: slot.pillarType, pillar_name: pillar?.name ?? slot.pillarType, campaign: campaign?.name ?? null, campaign_angle: campaign?.angle ?? null, persona: persona?.name ?? null, topic: pickTopic(pillar, analysis, i), scheduled_for: slot.at.toISOString() }; });
   const { data, costUsd: batchCost } = await generateObject({
     task: 'content.batch', system: CONTENT_SYSTEM, brief: input.brief ?? `Write ${briefs.length} Instagram posts for ${project.name}. Each must be publishable as-is.`,
@@ -61,7 +70,7 @@ export async function generateContent(scope: TenantScope, input: GenerateContent
     if (assets.length) { await db().update(scope, 'content_items', saved.id, { creative_asset_ids: assets.map((a) => a.id) }); saved.creative_asset_ids = assets.map((a) => a.id); }
     created.push(saved); seen.push({ id: saved.id, platform: saved.platform, hook: saved.hook, caption: saved.caption, dedup_hash: saved.dedup_hash }); recent.push({ hook: saved.hook, caption: saved.caption });
   }
-  log.info('content generated', { project: project.id, created: created.length, duplicates: rejectedDuplicates, qcBlocked: blockedByQc, cost: costUsd }); return { created, rejectedDuplicates, blockedByQc, costUsd };
+  log.info('content generated', { project: project.id, created: created.length, duplicates: rejectedDuplicates, qcBlocked: blockedByQc, cost: costUsd }); return { created, rejectedDuplicates, blockedByQc, costUsd, remainingSlots };
 }
 function needsVideo(format: string): boolean { return format === 'reel' || format === 'short_video' || format === 'story'; }
 function pickPillar(pillars: ContentPillar[], type: PillarType): ContentPillar | null { return pillars.filter((p) => p.type === type)[0] ?? pillars[0] ?? null; }

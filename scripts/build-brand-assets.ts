@@ -113,13 +113,11 @@ function stripSvgWrapper(svg: string): string {
   return svg.replace(/^<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '');
 }
 
-// eslint-disable-next-line no-console
 console.log(
   `FullSend brand assets written to public/brand (${Object.keys(assets).length + 2} files).`,
 );
 
 writeRasterIcons().catch((e) => {
-  // eslint-disable-next-line no-console
   console.error('Could not render the home-screen icons:', e);
   process.exitCode = 1;
 });

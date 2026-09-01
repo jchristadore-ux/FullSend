@@ -13,7 +13,32 @@ export const CALENDAR_WINDOWS = [7, 14, 30, 60, 90] as const;
 export type CalendarWindow = (typeof CALENDAR_WINDOWS)[number];
 export const CONTENT_STATUSES: ContentStatus[] = ['draft', 'approval_required', 'approved', 'scheduled', 'publishing', 'published', 'failed', 'review_required'];
 export interface PlanWindowInput { project: Project; strategy: MarketingStrategy; days: CalendarWindow; platforms: Platform[]; from?: Date; }
-export async function openSlots(scope: TenantScope, input: PlanWindowInput): Promise<Slot[]> { const { project, strategy, days, platforms } = input; const from = input.from ?? new Date(); const settings = await getSettings(scope, project.id); const wanted = planSlots({ days, from, strategy, platforms: platforms.filter((p) => p === 'instagram'), dailyCap: settings?.daily_post_cap ?? 3, quietHours: settings?.quiet_hours ?? null }); const existing = await listScheduled(scope, project.id, { from: from.toISOString(), to: new Date(from.getTime() + days * 86_400_000).toISOString() }); const taken = new Set(existing.map((p) => `${p.platform}:${p.scheduled_for.slice(0, 13)}`)); return wanted.filter((s) => !taken.has(`${s.platform}:${s.at.toISOString().slice(0, 13)}`)); }
+/**
+ * The slots in the window that nothing has been written for yet.
+ *
+ * A slot counts as taken once *content* exists for it, not only once that
+ * content has been scheduled. Content is written in batches of six, so a
+ * thirty-post calendar takes several jobs; without this, every batch after the
+ * first would be handed the same slots again and write the same days twice.
+ * It is also what makes pressing Generate again harmless.
+ */
+export async function openSlots(scope: TenantScope, input: PlanWindowInput): Promise<Slot[]> {
+  const { project, strategy, days, platforms } = input;
+  const from = input.from ?? new Date();
+  const to = new Date(from.getTime() + days * 86_400_000);
+  const settings = await getSettings(scope, project.id);
+  const wanted = planSlots({ days, from, strategy, platforms: platforms.filter((p) => p === 'instagram'), dailyCap: settings?.daily_post_cap ?? 3, quietHours: settings?.quiet_hours ?? null });
+
+  const scheduled = await listScheduled(scope, project.id, { from: from.toISOString(), to: to.toISOString() });
+  const written = await db().find(scope, 'content_items', { where: { project_id: project.id }, gte: { scheduled_for: from.toISOString() }, lt: { scheduled_for: to.toISOString() }, limit: 500 });
+
+  const hour = (platform: string, at: string) => `${platform}:${at.slice(0, 13)}`;
+  const taken = new Set<string>([
+    ...scheduled.map((p) => hour(p.platform, p.scheduled_for)),
+    ...written.filter((c) => c.scheduled_for).map((c) => hour(c.platform, c.scheduled_for!)),
+  ]);
+  return wanted.filter((s) => !taken.has(hour(s.platform, s.at.toISOString())));
+}
 export interface ScheduleResult { scheduled: ScheduledPost[]; skipped: { contentId: Uuid; reason: string }[]; }
 export async function scheduleContent(scope: TenantScope, project: Project, items: ContentItem[]): Promise<ScheduleResult> {
   const scheduled: ScheduledPost[] = []; const skipped: { contentId: Uuid; reason: string }[] = [];
@@ -28,7 +53,7 @@ export async function scheduleContent(scope: TenantScope, project: Project, item
     }
     const account = await getSocialAccount(scope, project.id, 'instagram'); if (!account || account.status === 'disconnected') log.info('scheduling without a live Instagram connection', { project: project.id });
     const existing = await db().findOne(scope, 'scheduled_posts', { where: { project_id: project.id, content_item_id: item.id } }); if (existing) { skipped.push({ contentId: item.id, reason: 'Already scheduled' }); continue; }
-    const post = await db().insert(scope, 'scheduled_posts', { id: newId(), project_id: project.id, content_item_id: item.id, social_account_id: account?.id ?? null, platform: 'instagram', scheduled_for: item.scheduled_for, timezone: project.timezone, status: 'scheduled', attempts: 0, last_error: null, next_attempt_at: null, created_at: nowIso() });
+    const post = await db().insert(scope, 'scheduled_posts', { id: newId(), project_id: project.id, content_item_id: item.id, social_account_id: account?.id ?? null, platform: 'instagram', scheduled_for: item.scheduled_for, timezone: project.timezone, status: 'scheduled', attempts: 0, last_error: null, next_attempt_at: null, created_at: nowIso(), started_at: null, platform_container_id: null, publish_submitted_at: null, published_at: null });
     await db().update(scope, 'content_items', item.id, { status: 'scheduled', updated_at: nowIso() }); scheduled.push(post);
   }
   log.info('content scheduled', { project: project.id, scheduled: scheduled.length, skipped: skipped.length }); return { scheduled, skipped };

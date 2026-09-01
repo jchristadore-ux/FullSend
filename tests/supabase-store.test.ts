@@ -24,7 +24,20 @@ interface Call {
  */
 function builder(rows: unknown[], calls: Call[]) {
   const self: Record<string, unknown> = {};
-  for (const method of ['select', 'eq', 'in', 'is', 'gte', 'lt', 'order', 'limit', 'range']) {
+  for (const method of [
+    'select',
+    'eq',
+    'in',
+    'is',
+    'gte',
+    'lte',
+    'lt',
+    'or',
+    'update',
+    'order',
+    'limit',
+    'range',
+  ]) {
     self[method] = (...args: unknown[]) => {
       calls.push({ method, args });
       return self;
@@ -103,5 +116,62 @@ describe('the Supabase driver builds queries without executing them early', () =
 
     const ins = calls.filter((c) => c.method === 'in');
     expect(ins.some((c) => c.args[0] === 'project_id')).toBe(true);
+  });
+});
+
+describe('claiming a job', () => {
+  const JOB = {
+    id: '22222222-2222-2222-2222-222222222222',
+    status: 'queued',
+    attempts: 0,
+    locked_at: null,
+    run_after: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('compares an unlocked job against null', async () => {
+    const { client, calls } = fakeClient([JOB]);
+    const store = new SupabaseStore(client);
+
+    await store.claimNextJob('2026-01-02T00:00:00.000Z', 60_000);
+
+    expect(calls.some((c) => c.method === 'is' && c.args[0] === 'locked_at' && c.args[1] === null))
+      .toBe(true);
+  });
+
+  it('compares a dead worker’s lock with eq, never is', async () => {
+    /*
+     * `.is()` accepts null, true and false — nothing else. Passing it a
+     * timestamp builds `locked_at=is.2026-01-01T…`, which PostgREST rejects,
+     * so every attempt to reclaim a job from a worker that died threw instead
+     * of recovering it. That is the one case the lease exists for, and no
+     * MemoryStore test could see it.
+     */
+    const stale = { ...JOB, status: 'running', locked_at: '2026-01-01T00:00:00.000Z' };
+    const { client, calls } = fakeClient([stale]);
+    const store = new SupabaseStore(client);
+
+    await store.claimNextJob('2026-01-02T00:00:00.000Z', 60_000);
+
+    const lockFilters = calls.filter((c) => c.args[0] === 'locked_at');
+    expect(lockFilters.some((c) => c.method === 'eq' && c.args[1] === stale.locked_at)).toBe(true);
+    expect(lockFilters.some((c) => c.method === 'is')).toBe(false);
+  });
+
+  it('bounds the claim to jobs that existed when the pass began', async () => {
+    const { client, calls } = fakeClient([JOB]);
+    const store = new SupabaseStore(client);
+
+    await store.claimNextJob('2026-01-02T00:00:00.000Z', 60_000, {
+      createdBefore: '2026-01-02T00:00:00.000Z',
+    });
+
+    expect(
+      calls.some(
+        (c) =>
+          c.method === 'lte' &&
+          c.args[0] === 'created_at' &&
+          c.args[1] === '2026-01-02T00:00:00.000Z',
+      ),
+    ).toBe(true);
   });
 });

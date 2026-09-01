@@ -10,7 +10,7 @@ import { createProject, createUser, setupContext, teardown, type TestContext } f
 import { db, enqueue } from '@/lib/db/repo';
 import { systemScope, userScope, TENANT_KEY, type TableName } from '@/lib/db';
 import { newId, nowIso } from '@/lib/ids';
-import { backoffSeconds, cronSecretValid, drainQueue, queueStats, runJob } from '@/lib/jobs/runner';
+import { backoffSeconds, cronSecretValid, drainQueue, HEAVY_JOBS, queueStats, runJob } from '@/lib/jobs/runner';
 import { check, LIMITS, remaining, resetLimits } from '@/lib/rate-limit';
 import { extractJson } from '@/lib/ai/client';
 import { FULLSEND_VOICE } from '@/lib/brand/fullsend-brand';
@@ -276,17 +276,96 @@ describe('background jobs', () => {
     expect(backoffSeconds(20)).toBe(3600);
   });
 
-  it('processes one durable job per invocation and reports what happened', async () => {
+  it('drains independent jobs up to the bound it was given', async () => {
+    // schedule_content only touches the database — the class of work a pass is
+    // allowed to run several of.
     const sys = systemScope('test');
     for (let i = 0; i < 3; i++) {
-      await enqueue(sys, 'collect_analytics', { projectId: project.id }, { projectId: project.id });
+      await enqueue(sys, 'schedule_content', { projectId: project.id }, { projectId: project.id });
+    }
+    const result = await drainQueue({ max: 10 });
+    expect(result.processed).toBe(3);
+    expect(result.stopped).toBe('empty');
+
+    const stats = await queueStats();
+    expect(stats.succeeded + stats.failed + stats.dead).toBe(3);
+    expect(stats.queued).toBe(0);
+  });
+
+  it('stops after one expensive job, however many are waiting', async () => {
+    // The bound that matters: thirty generations are thirty passes, never one
+    // invocation that runs thirty AI calls and dies half-way through.
+    const sys = systemScope('test');
+    for (let i = 0; i < 3; i++) {
+      await enqueue(sys, 'generate_content', { projectId: project.id }, { projectId: project.id });
     }
     const result = await drainQueue({ max: 10 });
     expect(result.processed).toBe(1);
+    expect(result.stopped).toBe('heavy');
+    expect((await queueStats()).queued).toBe(2);
+  });
 
+  it('never follows a chain into a second stage in the same pass', async () => {
+    // daily_autopilot is cheap and its whole job is to enqueue the expensive
+    // ones. Those successors belong to the next pass.
+    const sys = systemScope('test');
+    await enqueue(sys, 'daily_autopilot', { projectId: project.id }, { projectId: project.id });
+
+    const result = await drainQueue({ max: 25 });
+    expect(result.processed).toBe(1);
+    expect(result.succeeded).toBe(1);
+
+    // The successors it queued are real, and still queued.
     const stats = await queueStats();
-    expect(stats.succeeded + stats.failed + stats.dead).toBe(1);
-    expect(stats.queued).toBe(2);
+    expect(stats.queued).toBeGreaterThan(0);
+    const queued = await db().find(sys, 'jobs', { where: { status: 'queued' } });
+    expect(queued.some((j) => j.type === 'generate_content')).toBe(true);
+  });
+
+  it('honours the time budget rather than starting work it cannot finish', async () => {
+    const sys = systemScope('test');
+    for (let i = 0; i < 3; i++) {
+      await enqueue(sys, 'schedule_content', { projectId: project.id }, { projectId: project.id });
+    }
+    // An invocation with no time left claims nothing at all, rather than
+    // starting a job it would be killed part-way through — the exact way a
+    // claimed job used to end up stranded in `running`.
+    const result = await drainQueue({ max: 10, budgetMs: 0 });
+    expect(result.processed).toBe(0);
+    expect(result.stopped).toBe('budget');
+    expect((await queueStats()).queued).toBe(3);
+  });
+
+  it('leaves a job for the next pass rather than claiming it twice', async () => {
+    const sys = systemScope('test');
+    await enqueue(sys, 'schedule_content', { projectId: project.id }, { projectId: project.id });
+
+    const [a, b] = await Promise.all([drainQueue({ max: 5 }), drainQueue({ max: 5 })]);
+    expect(a.processed + b.processed).toBe(1);
+  });
+
+  it('classifies every job that talks to an AI provider or a platform as expensive', () => {
+    /*
+     * The list is what bounds a worker pass, so a new job type that calls out
+     * to somebody else's servers and is not on it would quietly reintroduce
+     * the long-running invocation this whole design exists to prevent.
+     */
+    for (const type of [
+      'analyze_repository',
+      'generate_strategy',
+      'generate_brand',
+      'generate_content',
+      'optimize',
+      'collect_analytics',
+      'scan_trends',
+      'publish_post',
+    ] as const) {
+      expect(HEAVY_JOBS.has(type)).toBe(true);
+    }
+    // Bookkeeping only: several of these in one pass is the point.
+    for (const type of ['schedule_content', 'quality_control', 'daily_autopilot'] as const) {
+      expect(HEAVY_JOBS.has(type)).toBe(false);
+    }
   });
 
   it('refuses cron requests without the shared secret', () => {
