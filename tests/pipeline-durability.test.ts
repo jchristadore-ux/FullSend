@@ -13,8 +13,10 @@ import { CONTENT_BATCH_SIZE } from '@/lib/content/generate';
 import { buildStrategy } from '@/lib/strategy/build';
 import { getProvider, setProvider } from '@/lib/ai/client';
 import { db, enqueue, enqueueOnce, getAnalysis, getStrategy } from '@/lib/db/repo';
-import { runJob } from '@/lib/jobs/runner';
+import { MAX_CONTENT_BATCHES, MAX_EMPTY_CONTENT_BATCHES, runJob } from '@/lib/jobs/runner';
 import { pipelineState } from '@/lib/pipeline/state';
+import { topUpContent } from '@/lib/automation/autopilot';
+import { openSlots } from '@/lib/scheduler/schedule';
 import type { AiProvider, CompletionRequest } from '@/lib/ai/types';
 import type { Job, JobType, Project } from '@/lib/types';
 
@@ -252,14 +254,161 @@ describe('durable, resumable pipeline', () => {
       await db().remove(ctx.scope, 'jobs', j.id);
     }
 
-    // A one-week window is small enough that a single batch fills it, so the
-    // chain must end rather than queue a batch with nothing left to write.
+    /*
+     * A one-week window is a handful of slots. The chain has to walk them a
+     * batch at a time and then stop of its own accord — the failure this
+     * guards against is a chain that keeps queueing itself with nothing left
+     * to write, which fills the queue forever and spends the AI budget doing
+     * it. So: run it out, and require both that it ends and that it ended
+     * because the work ran out rather than because MAX_CONTENT_BATCHES caught
+     * it.
+     */
     await runFresh('generate_content', { days: 7 });
 
-    const queued = await db().find(ctx.scope, 'jobs', {
-      where: { project_id: project.id, type: 'generate_content', status: 'queued' },
+    let passes = 0;
+    for (;;) {
+      const queued = await db().find(ctx.scope, 'jobs', {
+        where: { project_id: project.id, type: 'generate_content', status: 'queued' },
+      });
+      if (queued.length === 0) break;
+      expect(queued).toHaveLength(1);
+      expect(++passes).toBeLessThan(MAX_CONTENT_BATCHES);
+      await runJob({ ...(queued[0] as Job), attempts: 1 });
+    }
+
+    // It really did write the week, rather than ending by writing nothing.
+    const written = await db().find(ctx.scope, 'content_items', {
+      where: { project_id: project.id },
     });
-    expect(queued).toHaveLength(0);
+    expect(written.length).toBeGreaterThan(CONTENT_BATCH_SIZE);
+  });
+
+  /*
+   * The seed, the format and the topic a batch writes against all come from
+   * the slot it was given, so asking twice for the same slot gets the same
+   * post back — including the same post the duplicate guard just turned down.
+   * A batch that wrote nothing therefore has to move along, or the chain
+   * spends its whole streak re-writing one rejected post and never reaches the
+   * rest of the calendar.
+   */
+  it('steps past a slot it could not fill rather than asking for it again', async () => {
+    await throughPlan();
+    const strategy = (await getStrategy(ctx.scope, project.id))!;
+    const open = await openSlots(ctx.scope, {
+      project,
+      strategy,
+      days: 30,
+      platforms: ['instagram'],
+    });
+    expect(open.length).toBeGreaterThan(2);
+
+    // Two empty batches behind it: this one must land on the third slot.
+    const result = await topUpContent(ctx.scope, project, 30, undefined, 'initial', 2);
+    expect(result.generated).toBe(CONTENT_BATCH_SIZE);
+
+    const written = await db().find(ctx.scope, 'content_items', {
+      where: { project_id: project.id },
+    });
+    expect(written).toHaveLength(CONTENT_BATCH_SIZE);
+    expect(written[0].scheduled_for).toBe(open[2].at.toISOString());
+
+    // And the slots it stepped over are still counted as waiting.
+    expect(result.remainingSlots).toBe(open.length - CONTENT_BATCH_SIZE);
+  });
+
+  /*
+   * A batch is one post, so "this batch wrote nothing" is an ordinary event:
+   * the duplicate guard turned down one hook. It must not abandon the rest of
+   * the calendar — and a model that has genuinely run dry must still stop the
+   * chain rather than burn the budget writing the same post forever.
+   */
+  describe('a batch that writes nothing', () => {
+    /** Composes one fixed post, so everything after the first is a duplicate. */
+    function alwaysTheSamePost(): AiProvider {
+      const real = getProvider();
+      return {
+        name: real.name,
+        live: real.live,
+        modelFor: (tier) => real.modelFor(tier),
+        complete: async (req: CompletionRequest) => {
+          if (req.task !== 'content.batch') return real.complete(req);
+          const items = Array.from({ length: CONTENT_BATCH_SIZE }, () => ({
+            platform: 'instagram',
+            format: 'static',
+            pillar_type: 'education',
+            hook: 'The one hook this model knows',
+            caption: 'The one caption this model knows, said the one way it knows how to say it.',
+            cta: 'Link in bio',
+            hashtags: ['#tasks'],
+            script: null,
+            slides: null,
+            video_plan: null,
+          }));
+          return {
+            text: JSON.stringify({ items }),
+            model: real.modelFor(req.tier),
+            provider: real.name,
+            usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 },
+            costUsd: 0,
+            cacheHit: false,
+          };
+        },
+      };
+    }
+
+    /** Runs one content batch and returns what the handler recorded on the job. */
+    async function batch(payload: Record<string, unknown>) {
+      const job = await enqueue(ctx.scope, 'generate_content', {
+        projectId: project.id,
+        ...payload,
+      }, { projectId: project.id });
+      await runJob({ ...job, attempts: 1 });
+      const row = (await db().get(ctx.scope, 'jobs', job.id)) as Job;
+      expect(row.status).toBe('succeeded');
+      return row.result as {
+        generated: number;
+        rejectedDuplicates: number;
+        emptyStreak: number;
+        nextBatchQueued: boolean;
+      };
+    }
+
+    beforeEach(async () => {
+      await throughPlan();
+      for (const j of await db().find(ctx.scope, 'jobs', {
+        where: { project_id: project.id, type: 'generate_content' },
+      })) {
+        await db().remove(ctx.scope, 'jobs', j.id);
+      }
+      setProvider(alwaysTheSamePost());
+    });
+
+    it('keeps the chain alive rather than abandoning the calendar', async () => {
+      // The first batch writes the one post; the second finds it a duplicate
+      // and writes nothing. The calendar still has slots, so the chain goes on.
+      const first = await batch({ days: 30 });
+      expect(first.generated).toBe(CONTENT_BATCH_SIZE);
+
+      const second = await batch({ days: 30, batch: 1 });
+      expect(second.generated).toBe(0);
+      expect(second.rejectedDuplicates).toBeGreaterThan(0);
+      expect(second.emptyStreak).toBe(1);
+      expect(second.nextBatchQueued).toBe(true);
+    });
+
+    it('gives up once it has written nothing several times running', async () => {
+      await batch({ days: 30 });
+
+      // Carry the streak forward the way the chain does, up to the limit.
+      let streak = 0;
+      for (let i = 1; i <= MAX_EMPTY_CONTENT_BATCHES; i++) {
+        const pass = await batch({ days: 30, batch: i, emptyStreak: streak });
+        expect(pass.generated).toBe(0);
+        streak = pass.emptyStreak;
+        expect(streak).toBe(i);
+        expect(pass.nextBatchQueued).toBe(i < MAX_EMPTY_CONTENT_BATCHES);
+      }
+    });
   });
 
   it('Test 7 — simultaneous requests do not duplicate a stage', async () => {

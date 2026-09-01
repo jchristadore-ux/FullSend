@@ -372,6 +372,8 @@ export async function topUpContent(
   days: number,
   brief?: string,
   origin: ContentItem['origin'] = 'autopilot',
+  /** Open slots to step past — one per consecutive batch that wrote nothing. */
+  skipSlots = 0,
 ): Promise<TopUpResult> {
   const empty = (reason: string, remainingSlots = 0): TopUpResult => ({
     generated: 0,
@@ -401,13 +403,25 @@ export async function topUpContent(
     publishablePlatforms(scope, project, strategy),
   ]);
 
-  const slots = await openSlots(scope, {
+  const all = await openSlots(scope, {
     project,
     strategy,
     days: days as 7 | 14 | 30 | 60 | 90,
     platforms,
   });
-  if (slots.length === 0) return empty('The calendar is already full for this window');
+  if (all.length === 0) return empty('The calendar is already full for this window');
+
+  /*
+   * Step past the slots the last few batches could not fill.
+   *
+   * A batch takes the first open slot. If the post it wrote for that slot was
+   * turned down as too close to an existing one, the slot stays open — and
+   * asking again for the same slot, with the same brief and the same seed,
+   * gets the same rejected post back forever. So each consecutive empty batch
+   * moves one slot further along, which changes the format, the pillar and the
+   * topic and gives the model something genuinely different to write.
+   */
+  const slots = all.slice(Math.min(skipSlots, Math.max(0, all.length - 1)));
 
   const result = await generateContent(scope, {
     project,
@@ -427,7 +441,10 @@ export async function topUpContent(
     rejectedDuplicates: result.rejectedDuplicates,
     blockedByQc: result.blockedByQc,
     reason: result.created.length ? 'Generated' : 'Nothing new passed the duplicate check',
-    remainingSlots: result.remainingSlots,
+    // Counted against every open slot in the window, not just the ones this
+    // batch was handed: a slot stepped over is still a slot waiting to be
+    // written, and the chain has to come back to it.
+    remainingSlots: Math.max(0, all.length - result.created.length),
   };
 }
 

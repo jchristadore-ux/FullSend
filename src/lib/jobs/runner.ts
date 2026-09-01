@@ -22,11 +22,30 @@ import type { Job, JobType } from '../types';
 const log = logger('jobs');
 const LOCK_TIMEOUT_MS = 3 * 60 * 1000;
 /**
- * A ceiling on how far one Generate can chain. Six posts a batch, so a
- * calendar tops out around sixty — comfortably more than any window the
- * product offers, and a hard stop if a slot ever fails to fill.
+ * A ceiling on how far one Generate can chain.
+ *
+ * One post per batch now, so this counts posts, not batches of six — it has to
+ * cover the longest calendar the product will accept (90 days at the fastest
+ * cadence the strategy schema allows) rather than a sixth of it, or the tail of
+ * a big calendar is silently never written.
+ *
+ * It is a runaway stop, not a budget. The chain normally ends on its own the
+ * moment no open slots remain, and spend is bounded by
+ * FULLSEND_AI_MONTHLY_BUDGET_USD; this only catches a slot that can never be
+ * filled. So it is set well clear of the largest real calendar, and
+ * `tests/content-batch-sizing.test.ts` checks that it still is.
  */
-const MAX_CONTENT_BATCHES = 10;
+export const MAX_CONTENT_BATCHES = 300;
+/**
+ * Empty batches in a row before the chain gives up.
+ *
+ * A batch writes nothing when every post it produced was too close to one
+ * already written. At one post a batch that happens routinely and means
+ * nothing, so it cannot be the stop signal — but a model that has genuinely
+ * exhausted the angles will keep producing near-repeats forever, and that has
+ * to end. Three in a row is the line between the two.
+ */
+export const MAX_EMPTY_CONTENT_BATCHES = 3;
 type Handler = (job: Job) => Promise<Record<string, unknown>>;
 
 const handlers: Record<JobType, Handler> = {
@@ -62,23 +81,31 @@ const handlers: Record<JobType, Handler> = {
    * Each batch persists the posts it wrote before this job returns, so a
    * calendar half-built is a calendar half-saved. While slots remain, the job
    * queues the next batch and stops; the worker picks that up on a later pass.
-   * A batch that writes nothing new ends the chain rather than looping.
+   *
+   * A batch that writes nothing does NOT end the chain, and that distinction
+   * matters now that a batch is a single post: one post landing too close to
+   * an existing one is the duplicate guard doing its job, not a reason to
+   * abandon the other twenty-nine slots. What ends the chain is several empty
+   * batches in a row — a model that has genuinely run out of angles — or
+   * running out of slots, which is how it normally finishes.
    */
   generate_content: async (job) => {
     const scope = systemScope('job:generate_content'); const projectId = String(job.payload.projectId); const project = await db().get(scope, 'projects', projectId); if (!project) throw new Error(`Project ${projectId} not found`);
     const days = Number(job.payload.days ?? 30); const batchIndex = Number(job.payload.batch ?? 0);
-    const result = await topUpContent(scope, project, days, job.payload.brief ? String(job.payload.brief) : undefined, (job.payload.origin as never) ?? 'initial');
+    const skipSlots = Number(job.payload.emptyStreak ?? 0);
+    const result = await topUpContent(scope, project, days, job.payload.brief ? String(job.payload.brief) : undefined, (job.payload.origin as never) ?? 'initial', skipSlots);
+    const emptyStreak = result.generated > 0 ? 0 : skipSlots + 1;
     let nextBatchQueued = false;
     if (result.generated > 0) {
       await db().update(scope, 'projects', projectId, { status: 'content_ready', updated_at: nowIso() });
       const key = `${projectId}:schedule`; await enqueueOnce(scope, 'schedule_content', { projectId, idempotencyKey: key }, { projectId, dedupeKey: key });
-      if (result.remainingSlots > 0 && batchIndex + 1 < MAX_CONTENT_BATCHES) {
-        const next = batchIndex + 1; const nextKey = `${projectId}:content:${days}:${next}`;
-        const { created } = await enqueueOnce(scope, 'generate_content', { projectId, days, origin: job.payload.origin ?? 'initial', brief: job.payload.brief ?? null, batch: next, idempotencyKey: nextKey }, { projectId, dedupeKey: nextKey });
-        nextBatchQueued = created;
-      }
     }
-    return { ...result, batch: batchIndex, nextBatchQueued };
+    if (result.remainingSlots > 0 && emptyStreak < MAX_EMPTY_CONTENT_BATCHES && batchIndex + 1 < MAX_CONTENT_BATCHES) {
+      const next = batchIndex + 1; const nextKey = `${projectId}:content:${days}:${next}`;
+      const { created } = await enqueueOnce(scope, 'generate_content', { projectId, days, origin: job.payload.origin ?? 'initial', brief: job.payload.brief ?? null, batch: next, emptyStreak, idempotencyKey: nextKey }, { projectId, dedupeKey: nextKey });
+      nextBatchQueued = created;
+    }
+    return { ...result, batch: batchIndex, emptyStreak, nextBatchQueued };
   },
   generate_creative: async (job) => { const scope = systemScope('job:generate_creative'); const item = await db().get(scope, 'content_items', String(job.payload.contentItemId)); if (!item) throw new Error('Content item not found'); return { contentId: item.id, assets: item.creative_asset_ids.length, note: 'Creative is materialized during content generation before scheduling.' }; },
   quality_control: async (job) => ({ projectId: String(job.payload.projectId), skipped: 'Quality control is executed as part of the content checkpoint.' }),

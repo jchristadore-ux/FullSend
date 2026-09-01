@@ -20,6 +20,7 @@ import {
 import { analyzeRepository } from '@/lib/analysis/analyze';
 import { approveStrategy, buildStrategy, ensureBrandProfile } from '@/lib/strategy/build';
 import { CONTENT_BATCH_SIZE, generateContent } from '@/lib/content/generate';
+import { MAX_EMPTY_CONTENT_BATCHES } from '@/lib/jobs/runner';
 import { openSlots, queueDepth, scheduleContent } from '@/lib/scheduler/schedule';
 import { publishScheduledPost } from '@/lib/publish/publish';
 import { collectAnalytics, postPerformance, summarise } from '@/lib/analytics/collect';
@@ -88,7 +89,7 @@ describe('FullSend end-to-end chain', () => {
     expect(slots.length).toBeGreaterThan(10);
 
     /* 6. Content generation with creative and quality control. */
-    const generated = await generateContent(ctx.scope, {
+    const contentInput = {
       project,
       analysis: analyzed.analysis,
       brand: strategy.brand!,
@@ -96,21 +97,39 @@ describe('FullSend end-to-end chain', () => {
       personas: [],
       pillars: strategy.pillars,
       campaigns: strategy.campaigns,
-      slots: slots.slice(0, 12),
-    });
+    };
+    const open = slots.slice(0, 12);
+    const firstBatch = await generateContent(ctx.scope, { ...contentInput, slots: open });
 
     /*
      * One call writes one batch, and every brief in that batch is accounted
      * for — written, or rejected by the duplicate guard. Twelve slots go in;
-     * the six the batch did not reach come back as work for the next job,
+     * the ones the batch did not reach come back as work for the next job,
      * which is what stops "thirty posts" from ever being one request.
      *
-     * The old assertion here was `> 5`, which quietly required all six briefs
-     * to survive the similarity check and failed whenever one legitimately
-     * did not.
+     * The old assertion here was `> 5`, which quietly required every brief in
+     * the batch to survive the similarity check and failed whenever one
+     * legitimately did not.
      */
-    expect(generated.created.length + generated.rejectedDuplicates).toBe(CONTENT_BATCH_SIZE);
-    expect(generated.remainingSlots).toBe(12 - CONTENT_BATCH_SIZE);
+    expect(firstBatch.created.length + firstBatch.rejectedDuplicates).toBe(CONTENT_BATCH_SIZE);
+    expect(firstBatch.remainingSlots).toBe(open.length - CONTENT_BATCH_SIZE);
+
+    /*
+     * Now play the part of the job chain and run the window out, because what
+     * the rest of this test needs is a calendar, not a batch. Each turn hands
+     * on only the slots the last one left, exactly as the queued follow-up job
+     * does when it re-derives the open slots.
+     */
+    const generated = {
+      created: [...firstBatch.created],
+      rejectedDuplicates: firstBatch.rejectedDuplicates,
+    };
+    for (let done = CONTENT_BATCH_SIZE; done < open.length; done += CONTENT_BATCH_SIZE) {
+      const next = await generateContent(ctx.scope, { ...contentInput, slots: open.slice(done) });
+      generated.created.push(...next.created);
+      generated.rejectedDuplicates += next.rejectedDuplicates;
+    }
+    expect(generated.created.length + generated.rejectedDuplicates).toBe(open.length);
     expect(generated.created.length).toBeGreaterThan(3);
     for (const item of generated.created) {
       expect(item.hook.length).toBeGreaterThan(3);
@@ -240,16 +259,31 @@ describe('FullSend end-to-end chain', () => {
     const before = await db().count(ctx.scope, 'content_items', {
       where: { project_id: project.id },
     });
-    // The 14-day window is legitimately full by now — every slot in it already
-    // has a post written for it — so the top-up extends the horizon, which is
-    // exactly what autopilot does when runway gets short.
-    const topUp = await topUpContent(ctx.scope, project, 60, 'More of what is working');
+    /*
+     * The 14-day window is legitimately full by now — every slot in it already
+     * has a post written for it — so the top-up extends the horizon, which is
+     * exactly what autopilot does when runway gets short.
+     *
+     * A top-up is one post, and one post can land close enough to an existing
+     * one that the duplicate guard turns it down. That is the guard working,
+     * not the machine failing, so this walks the chain the way the queue does:
+     * keep going while slots remain, and stop after the same run of empty
+     * batches that ends it in production.
+     */
+    let topUp = await topUpContent(ctx.scope, project, 60, 'More of what is working');
+    let toppedUp = topUp.generated;
+    let empties = topUp.generated > 0 ? 0 : 1;
+    while (topUp.remainingSlots > 0 && empties < MAX_EMPTY_CONTENT_BATCHES) {
+      topUp = await topUpContent(ctx.scope, project, 60, 'More of what is working', 'autopilot', empties);
+      toppedUp += topUp.generated;
+      empties = topUp.generated > 0 ? 0 : empties + 1;
+    }
     const after = await db().count(ctx.scope, 'content_items', {
       where: { project_id: project.id },
     });
     // The reason is the assertion message: a bare "expected 0 to be greater
     // than 0" in CI says nothing about which of the top-up guards fired.
-    expect(topUp.generated, topUp.reason).toBeGreaterThan(0);
+    expect(toppedUp, topUp.reason).toBeGreaterThan(0);
     expect(after).toBeGreaterThan(before);
 
     /* 14. Cost was tracked throughout. */
