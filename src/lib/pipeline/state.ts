@@ -14,7 +14,7 @@
 import 'server-only';
 import { type TenantScope } from '../db';
 import { db, getAnalysis, getBrandProfile, getStrategy } from '../db/repo';
-import { hasFailed, isStalled, stillRunning } from '../jobs/job-failure';
+import { hasFailed, isStalled, isWaitingForWorker, stillRunning } from '../jobs/job-failure';
 import type { JobType, Project, ScheduledPost, Uuid } from '../types';
 
 export type StageName = 'analysis' | 'marketing_plan' | 'content' | 'schedule';
@@ -28,6 +28,13 @@ export interface Stage {
   /** What was produced. Present once the stage is complete. */
   detail: string | null;
   error: string | null;
+  /**
+   * Why an unfinished stage is not moving, when the reason is ordinary.
+   *
+   * Distinct from `error`: a stage waiting its turn in the queue has nothing
+   * wrong with it, and saying so is not the same as reporting a failure.
+   */
+  note: string | null;
   /** True when this is the stage a retry should start from. */
   retryable: boolean;
 }
@@ -179,10 +186,19 @@ export async function pipelineState(
       error:
         status === 'failed'
           ? isStalled(failure)
-            ? 'This step was cut off part-way and never reported back. ' +
+            ? 'A worker claimed this step and never reported back. ' +
               (failure?.error ? `Last error: ${failure.error}. ` : '') +
               'Press Retry — everything already saved is kept.'
             : (failure?.error ?? 'This step failed')
+          : null,
+      /*
+       * A stage whose job is queued is waiting for the background worker, and
+       * the honest thing to show is how long it has been waiting — not a
+       * failure, and not a bare spinner that never explains itself.
+       */
+      note:
+        status === 'in_progress' && progress.some((p) => isWaitingForWorker(p))
+          ? `Queued, waiting for the background worker${waitedFor(progress)}.`
           : null,
       /*
        * Anything not finished can be started by hand. A stage showing a
@@ -201,6 +217,27 @@ export async function pipelineState(
     failedStage,
     publishing: publishingState(scheduled, jobs),
   };
+}
+
+/**
+ * How long the oldest waiting job has been queued, as a phrase to append.
+ *
+ * Empty when it is too new to be worth saying — a job queued nine seconds ago
+ * is simply about to run, and putting a number on that is noise.
+ */
+function waitedFor(progress: { updatedAt?: string | null }[], now = Date.now()): string {
+  let oldest = 0;
+  for (const p of progress) {
+    if (!p.updatedAt) continue;
+    const at = Date.parse(p.updatedAt);
+    if (!Number.isFinite(at)) continue;
+    oldest = Math.max(oldest, now - at);
+  }
+  const minutes = Math.floor(oldest / 60_000);
+  if (minutes < 1) return '';
+  if (minutes < 60) return ` for ${minutes} minute${minutes === 1 ? '' : 's'}`;
+  const hours = Math.floor(minutes / 60);
+  return ` for ${hours} hour${hours === 1 ? '' : 's'}`;
 }
 
 function publishingState(

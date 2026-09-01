@@ -58,6 +58,23 @@ interface AnalyzeState {
  */
 const STALL_MS = 3 * 60 * 1000;
 
+/**
+ * What counts as the run having moved.
+ *
+ * Not "a stage completed": the content stage is one durable job per post, so a
+ * calendar is dozens of them, and none of it completes the stage until the
+ * last one lands. Measured that way a run writing a post every few seconds
+ * looked frozen, and after three minutes this screen called it stuck and
+ * stopped polling — which stopped the tick that was draining the queue, so the
+ * verdict made itself true.
+ *
+ * The per-stage detail carries the count ("12 posts"), so any change in it is
+ * real progress and resets the clock.
+ */
+function progressSignature(stages: { status: string; detail: string | null }[]): string {
+  return stages.map((s) => `${s.status}:${s.detail ?? ''}`).join('|');
+}
+
 export function OnboardingFlow({ capabilities }: { capabilities: Capabilities }) {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('input');
@@ -71,7 +88,7 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
   // Set when polling starts, not at render: reading the clock during render is
   // impure, and the value is meaningless until there is a run to time.
   const movedAtRef = useRef(0);
-  const lastStepRef = useRef(0);
+  const lastStepRef = useRef('');
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -100,9 +117,9 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
         setState(json);
         setPipeline(pipe);
 
-        const reached = pipe.stages.filter((st) => st.status === 'complete').length;
-        if (reached > lastStepRef.current) {
-          lastStepRef.current = reached;
+        const signature = progressSignature(pipe.stages);
+        if (signature !== lastStepRef.current) {
+          lastStepRef.current = signature;
           movedAtRef.current = Date.now();
         }
 
@@ -149,7 +166,7 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
     setRemedy(null);
     setPhase('working');
     setPipeline(null);
-    lastStepRef.current = 0;
+    lastStepRef.current = '';
     movedAtRef.current = Date.now();
 
     try {

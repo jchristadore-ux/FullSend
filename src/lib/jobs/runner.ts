@@ -189,6 +189,34 @@ export const HEAVY_JOBS: ReadonlySet<JobType> = new Set<JobType>([
 /** Budget a pass keeps in reserve before starting another job. */
 export const JOB_HEADROOM_MS = 5_000;
 
+/**
+ * Reserve to keep before starting a job that might call a provider.
+ *
+ * A pass cannot know a job's type until it has claimed it, so a pass that
+ * allows more than one heavy job has to assume the next claim is heavy and
+ * keep back enough for the longest one — the provider timeout plus margin.
+ * Five seconds was the right reserve when a pass ran a single heavy job and
+ * then stopped; it is not enough to start a second one, and a pass killed
+ * part-way leaves a claimed job looking stalled, which is the failure this
+ * whole file exists to avoid.
+ */
+export const HEAVY_JOB_RESERVE_MS = 45_000;
+
+/**
+ * Heavy jobs one scheduled worker pass may run.
+ *
+ * One was right when a single content job wrote six posts and could take the
+ * whole provider timeout. A post is now one job of a few seconds, so a
+ * calendar is tens of heavy jobs rather than a handful — and at one per pass,
+ * against a scheduler GitHub Actions actually fires every one to four hours
+ * rather than the five minutes it is asked for, a month of content took most
+ * of a day and spent nearly all of it looking broken.
+ *
+ * It lives here rather than in the cron route so the bound and the reserve
+ * that makes it safe are read together, and so a test can hold them.
+ */
+export const CRON_MAX_HEAVY_PER_PASS = 4;
+
 export interface DrainResult {
   processed: number;
   succeeded: number;
@@ -219,10 +247,22 @@ export interface DrainResult {
  * limit. Every one of those bounds is covered by a test.
  */
 export async function drainQueue(
-  opts: { max?: number; budgetMs?: number; projectId?: string | null; maxHeavy?: number } = {},
+  opts: {
+    max?: number;
+    budgetMs?: number;
+    projectId?: string | null;
+    maxHeavy?: number;
+    /**
+     * Budget kept back before each claim. Defaults to the light-job headroom,
+     * which is right for a pass that runs one heavy job and stops; a pass
+     * allowing several must reserve for the longest one it might claim.
+     */
+    heavyReserveMs?: number;
+  } = {},
 ): Promise<DrainResult> {
   const max = Math.max(1, Math.min(opts.max ?? 1, 50));
   const maxHeavy = Math.max(1, opts.maxHeavy ?? 1);
+  const reserveMs = opts.heavyReserveMs ?? (maxHeavy > 1 ? HEAVY_JOB_RESERVE_MS : JOB_HEADROOM_MS);
   // Taken as given: a pass with less budget than the reserve starts nothing,
   // which is the correct answer for an invocation that is already nearly over.
   const budgetMs = opts.budgetMs ?? 50_000;
@@ -237,7 +277,7 @@ export async function drainQueue(
   let stopped: DrainResult['stopped'] = 'max';
 
   while (processed < max) {
-    if (Date.now() + JOB_HEADROOM_MS > deadline) {
+    if (Date.now() + reserveMs > deadline) {
       stopped = 'budget';
       break;
     }

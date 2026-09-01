@@ -494,7 +494,7 @@ describe('a job whose worker died', () => {
 
     expect(analysis.status).toBe('failed');
     expect(analysis.retryable).toBe(true);
-    expect(analysis.error).toMatch(/cut off part-way/);
+    expect(analysis.error).toMatch(/never reported back/);
     expect(state.failedStage).toBe('analysis');
   });
 
@@ -701,7 +701,21 @@ describe('the marketing plan', () => {
     expect(again!.id).toBe(first!.id);
   });
 
-  it('offers a button on a queued job nothing has reached', async () => {
+  /*
+   * A queued job nobody has reached is waiting, not broken.
+   *
+   * This used to be reported as a failure once it was six minutes old, which
+   * was calibrated against a scheduler firing every five minutes. The one that
+   * actually runs — GitHub Actions cron on a quiet repository — fires every one
+   * to four hours, so healthy work spent almost all of its life labelled
+   * failed. That mattered beyond the wording: the onboarding screen stops
+   * polling on a failed stage, and its polling is what nudges the queue, so
+   * the false verdict removed the very thing that would have cleared it.
+   *
+   * What the screen genuinely needs is a button and an explanation. It gets
+   * both — without the word "failed".
+   */
+  it('calls a queued job nothing has reached waiting, and still offers a button', async () => {
     await analyzeProduct(ctx.scope, project, 'acme/taskflow', { client: fakeGitHubClient() });
     const { job } = await enqueueOnce(
       ctx.scope,
@@ -714,8 +728,15 @@ describe('the marketing plan', () => {
 
     const state = await pipelineState(ctx.scope, project);
     const plan = state.stages.find((s) => s.name === 'marketing_plan')!;
-    expect(plan.status).toBe('failed');
+
+    expect(plan.status).toBe('in_progress');
+    expect(plan.error).toBeNull();
+    expect(plan.note).toMatch(/waiting for the background worker/i);
+    // Twenty minutes queued, and it says so rather than leaving a bare spinner.
+    expect(plan.note).toMatch(/20 minutes/);
     expect(plan.retryable).toBe(true);
+    // And nothing downstream treats the run as failed.
+    expect(state.failedStage).toBeNull();
   });
 
   it('gives every unfinished stage a button, running or not', async () => {
