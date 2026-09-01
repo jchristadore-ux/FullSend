@@ -18,7 +18,7 @@ import { coerceToSchema } from '@/lib/ai/coerce';
 import { jsonSchemaFor } from '@/lib/ai/json-schema';
 import { clearCache } from '@/lib/ai/cache';
 import { FullSendError } from '@/lib/errors';
-import { contentBatchSchema, productAnalysisSchema, recommendationsSchema } from '@/lib/schemas';
+import { contentBatchSchema, productAnalysisSchema, recommendationsSchema, strategySchema } from '@/lib/schemas';
 import type { AiProvider, CompletionRequest, CompletionResponse } from '@/lib/ai/types';
 import { freshStore, teardown } from './helpers';
 
@@ -250,6 +250,51 @@ describe('generating against a real reply', () => {
 
   it('still refuses output that is wrong rather than merely mistyped', async () => {
     setProvider(new ScriptedProvider([analysisReply({ one_liner: 'no' })]));
+
+    await expect(generateObject({ ...options, noCache: true })).rejects.toThrow(FullSendError);
+  });
+
+  /*
+   * The floor under every stage that builds on a verified analysis.
+   *
+   * A model that omits a required field is a coin flip, not an outage: the
+   * same marketing-plan request succeeded one morning and failed that
+   * afternoon on `value_proposition` and `posting_cadence`, taking the whole
+   * pipeline with it. Rather than lose the run, the stage is composed from the
+   * analysis that was already checked against the repository.
+   */
+  it('composes a downstream stage rather than losing the run', async () => {
+    const provider = new ScriptedProvider(['{"nothing": "usable"}']);
+    setProvider(provider);
+
+    const { data, model } = await generateObject({
+      task: 'strategy.build',
+      system: 'You are FullSend’s head of marketing strategy.',
+      brief: 'Build the strategy.',
+      context: {
+        project_name: 'Taskflow',
+        analysis: { one_liner: 'Turns team chatter into a task list', category: 'productivity', features: [] },
+      },
+      schema: strategySchema,
+      noCache: true,
+    });
+
+    expect(data.positioning.length).toBeGreaterThan(9);
+    expect(data.pillars.length).toBeGreaterThan(0);
+    // Recorded as composed, so the UI reports the provider honestly rather
+    // than passing this off as the model's own work.
+    expect(model).toContain('deterministic');
+  });
+
+  it('never composes the product analysis, whatever the model returns', async () => {
+    /*
+     * The one stage that reads the repository rather than a verified artefact.
+     * Composing it would be a guess presented as a reading of somebody's code,
+     * and every later stage's honesty is built on it — the content rules
+     * forbid claiming a capability absent from the verified feature list, and
+     * this is where that list comes from.
+     */
+    setProvider(new ScriptedProvider(['{"nothing": "usable"}']));
 
     await expect(generateObject({ ...options, noCache: true })).rejects.toThrow(FullSendError);
   });
