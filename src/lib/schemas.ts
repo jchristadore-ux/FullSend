@@ -87,7 +87,13 @@ export const contentMixSchema = z.object({
 
 export const strategySchema = z.object({
   positioning: z.string().min(10).max(600),
-  value_proposition: z.string().min(5).max(400),
+  /*
+   * Empty rather than required, and the caller fills it from the verified
+   * analysis. A model omitting one sentence should not cost the whole plan,
+   * and the product's own one-liner is a truthful stand-in — it is derived
+   * from the repository, not invented.
+   */
+  value_proposition: z.string().max(400).default(''),
   audience_summary: z.string().max(800).default(''),
   pain_points: z.array(z.string()).max(10).default([]),
   differentiators: z.array(z.string()).max(10).default([]),
@@ -100,7 +106,19 @@ export const strategySchema = z.object({
       hour: z.number().int().min(0).max(23),
       platform: platformSchema,
     })).default([]),
-  }),
+  /*
+   * Defaulted, because every field inside it already is. This is scheduling
+   * configuration, not content: the schema states what a normal cadence looks
+   * like, so a model that omits the object entirely has withheld nothing that
+   * has to be invented — and failing the whole marketing plan over it, which
+   * is what happened, is indefensible.
+   *
+   * `prefault` rather than `default` so the empty object is fed *through* the
+   * parser and the fields fill themselves from their own declarations. A
+   * `default` would have to restate all three here, which is how the two
+   * copies drift apart.
+   */
+  }).prefault({}),
   platform_strategy: z.array(z.object({
     platform: platformSchema,
     rationale: z.string().max(400).default(''),

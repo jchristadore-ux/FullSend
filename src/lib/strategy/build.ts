@@ -48,7 +48,10 @@ Hold to these:
 - Pillars are what you post about week after week, not campaign names. Every
   pillar must have a type from the exact five-value list above.
 - Campaigns are time-boxed Instagram angles with a testable hypothesis.
-- Cadence must be sustainable by one person with an automated system.
+- Cadence must be sustainable by one person with an automated system, and
+  posting_cadence must be present with instagram_per_week set.
+- value_proposition is required: one sentence, what the product gives someone
+  and why they should care.
 - No jargon. No "leverage", no "unlock", no "in today's landscape".
 
 Return JSON only.`;
@@ -137,7 +140,9 @@ export async function buildStrategy(
     project_id: project.id,
     version,
     positioning: data.positioning,
-    value_proposition: data.value_proposition,
+    // Same fallback shape as `differentiators` below: the model's answer when
+    // it gave one, the verified analysis when it did not.
+    value_proposition: data.value_proposition || analysis.one_liner,
     audience_summary: data.audience_summary,
     pain_points: data.pain_points,
     differentiators: data.differentiators.length ? data.differentiators : analysis.differentiators,
