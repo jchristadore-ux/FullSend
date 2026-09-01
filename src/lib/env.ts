@@ -163,6 +163,18 @@ export const env = {
   /** Legal entity named in the policies. Falls back to the product name. */
   legalEntity: opt('FULLSEND_LEGAL_ENTITY') ?? 'FullSend',
 
+  ops: {
+    /*
+     * Where a dead job files its issue, as `owner/repo`.
+     *
+     * Unset, nothing is reported anywhere and a failure is only visible in the
+     * Control Room — which is where it was before, and where nobody looks
+     * until something is already wrong. Needs GITHUB_TOKEN to carry issue
+     * write access on that repository.
+     */
+    issueRepo: opt('FULLSEND_ISSUE_REPO'),
+  },
+
   admin: {
     /** Comma-separated emails allowed into the FullSend Control Room. */
     emails: (opt('FULLSEND_ADMIN_EMAILS') ?? '')

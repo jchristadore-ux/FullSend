@@ -5,6 +5,7 @@ import { db, enqueueOnce, getAnalysis, recordError } from '../db/repo';
 import { FullSendError, isFullSendError } from '../errors';
 import { nowIso } from '../ids';
 import { queueStamp } from './clock';
+import { reportJobFailure } from '../ops/report-failure';
 import { logger } from '../logger';
 import { systemAnalyzeProduct } from '../analysis/analyze';
 import { buildStrategy, ensureBrandProfile } from '../strategy/build';
@@ -129,7 +130,12 @@ export function backoffSeconds(attempt: number): number { return Math.min(3600, 
 export async function runJob(job: Job): Promise<{ status: 'succeeded' | 'failed' | 'dead' }> {
   const scope = systemScope('job runner'); const started = Date.now();
   try { const handler = handlers[job.type]; if (!handler) throw new Error(`No handler for job type ${job.type}`); const result = await handler(job); await db().update(scope, 'jobs', job.id, { status: 'succeeded', result, last_error: null, locked_at: null, updated_at: nowIso() }); log.info('job succeeded', { id: job.id, type: job.type, ms: Date.now() - started }); return { status: 'succeeded' }; }
-  catch (e) { const message = e instanceof Error ? e.message : String(e); const retryable = isFullSendError(e) ? e.retryable : true; const exhausted = job.attempts >= job.max_attempts || !retryable; if (exhausted) { await db().update(scope, 'jobs', job.id, { status: 'dead', last_error: message, locked_at: null, updated_at: nowIso() }); await recordError(scope, { projectId: job.project_id, scope: `job:${job.type}`, message, remedy: isFullSendError(e) ? e.remedy : null, fatal: true }); return { status: 'dead' }; } // A failure that already knows when it may be tried again — a publish holding
+  catch (e) { const message = e instanceof Error ? e.message : String(e); const retryable = isFullSendError(e) ? e.retryable : true; const exhausted = job.attempts >= job.max_attempts || !retryable; if (exhausted) { const remedy = isFullSendError(e) ? e.remedy : null; await db().update(scope, 'jobs', job.id, { status: 'dead', last_error: message, locked_at: null, updated_at: nowIso() }); await recordError(scope, { projectId: job.project_id, scope: `job:${job.type}`, message, remedy, fatal: true });
+      // A job that has given up is the one failure nobody finds on their own.
+      // Reporting is best-effort and never throws — the durable record above
+      // is already written, so a lost issue loses nothing.
+      await reportJobFailure({ job, message, remedy });
+      return { status: 'dead' }; } // A failure that already knows when it may be tried again — a publish holding
     // its own backoff, a platform naming a retry-after — decides its own slot;
     // the queue's exponential backoff is the floor, never an override.
     const ownBackoff = isFullSendError(e) ? String(e.meta?.retryAfter ?? '') : ''; const defaultRunAfter = Date.now() + backoffSeconds(job.attempts) * 1000; const parsedOwn = ownBackoff ? Date.parse(ownBackoff) : NaN; const runAfter = new Date(Number.isNaN(parsedOwn) ? defaultRunAfter : Math.max(parsedOwn, Date.now() + 1000)).toISOString(); await db().update(scope, 'jobs', job.id, { status: 'queued', last_error: message, run_after: runAfter, locked_at: null, updated_at: nowIso() }); await recordError(scope, { projectId: job.project_id, scope: `job:${job.type}`, message, remedy: isFullSendError(e) ? e.remedy : null, fatal: false }); return { status: 'failed' }; }
