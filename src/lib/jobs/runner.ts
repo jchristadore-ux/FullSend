@@ -88,6 +88,8 @@ export async function drainQueue(opts: { max?: number; budgetMs?: number; projec
   // A cron/serverless invocation processes ONE durable job only. It never follows
   // the chain into another AI call. The completed job persists its successor;
   // the next heartbeat invocation handles that successor.
+  // A single invocation is intentionally limited to one durable job. `opts.max`
+  // remains accepted for API compatibility, but cannot turn this into a batch worker.
   const max = 1;
   const budgetMs = Math.min(opts.budgetMs ?? 50_000, 55_000);
   const deadline = Date.now() + budgetMs;
