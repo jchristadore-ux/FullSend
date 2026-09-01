@@ -62,6 +62,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ── Preflight ──────────────────────────────────────────────────────────────
+  #
+  # Says which deployment this heartbeat is actually driving, and whether its
+  # secret is accepted there. It is a separate job for one reason: the sweep
+  # below runs for hours, and a workflow's logs cannot be read until the job
+  # holding them finishes. A question that takes seconds to answer should not
+  # be locked inside a five-hour run.
+  #
+  # It exists because that question went unanswered for a whole evening. The
+  # sweep polled happily and the queue never moved, and "is it even talking to
+  # the right deployment" was the one assumption nothing could check — the
+  # secret is opaque by design, and a wrong URL that still answers 200 looks
+  # exactly like a right one.
+  #
+  # Nothing secret is printed. `appUrl` comes from the deployment's own public
+  # health endpoint, and the queue response is job counts.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Report which deployment this heartbeat drives
+        env:
+          URL: ${{ secrets.FULLSEND_URL }}
+          SECRET: ${{ secrets.FULLSEND_CRON_SECRET }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$SECRET" ]; then
+            echo "::error::Set the FULLSEND_URL and FULLSEND_CRON_SECRET repository secrets first."
+            exit 1
+          fi
+
+          echo "── the deployment FULLSEND_URL resolves to"
+          health=$(curl --silent --show-error --max-time 30 "$URL/api/health" || echo '{}')
+          echo "appUrl:   $(printf '%s' "$health" | jq -r '.appUrl // "unreachable"')"
+          echo "database: $(printf '%s' "$health" | jq -r '.database // "unknown"')"
+          echo "queue:    $(printf '%s' "$health" | jq -c '.queue // "not reported"')"
+
+          echo
+          echo "── whether the cron secret is accepted there"
+          code=$(curl --silent --output /tmp/cron.json --write-out '%{http_code}' \
+                      --max-time 60 -H "Authorization: Bearer $SECRET" \
+                      "$URL/api/cron/queue" || echo 000)
+          echo "POST /api/cron/queue -> HTTP $code"
+          echo "response: $(cat /tmp/cron.json 2>/dev/null | head -c 500)"
+
+          case "$code" in
+            200) echo "The heartbeat reaches this deployment and its secret is accepted." ;;
+            401) echo "::error::FULLSEND_CRON_SECRET does not match CRON_SECRET on the deployment at FULLSEND_URL." ; exit 1 ;;
+            000) echo "::error::FULLSEND_URL is unreachable." ; exit 1 ;;
+            *)   echo "::error::Unexpected status $code from the cron endpoint." ; exit 1 ;;
+          esac
+
   ping:
     runs-on: ubuntu-latest
     # A sweep runs until GitHub's job ceiling or the next firing replaces it.
