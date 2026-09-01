@@ -97,6 +97,25 @@ ANTHROPIC_API_KEY or OPENAI_API_KEY
 
 GitHub Actions drives the background queue/heartbeat. The worker claims jobs with a lease, persists results, retries bounded failures, and recovers stale work.
 
+### How often the queue actually drains
+
+`.github/workflows/heartbeat.yml` asks for `*/5 * * * *`. GitHub does not honour it. Scheduled workflows are throttled hard on quiet repositories, and in practice this one fires anywhere from 45 minutes to four hours apart.
+
+Nothing in the schedule can fix that, so the run compensates for it: the queue job stays up and sweeps continuously — polling every 15 seconds while there is work and every 60 seconds when idle — until the next firing cancels and replaces it. Coverage comes from runs being long rather than from the schedule being punctual.
+
+**On a public repository this is free**: Actions minutes are unmetered. **On a private repository it is not** — a continuous sweep will consume your monthly Actions allowance. There, either shorten the `deadline` in the workflow or use an external pinger instead.
+
+### Driving the queue from outside GitHub
+
+For a genuinely punctual worker, point any scheduler at the queue endpoint:
+
+```
+POST https://<your-app>/api/cron/queue
+Authorization: Bearer <CRON_SECRET>
+```
+
+Every five minutes is a sensible interval; each call is a bounded worker pass and returns as soon as it has done its allowance. Free services that do this include cron-job.org, Cronitor and UptimeRobot. On Vercel Pro you can use native crons in `vercel.json` instead — disable the Actions workflow if you do, so the jobs are not driven twice.
+
 ## Security
 
 - Social access tokens are encrypted at rest.
