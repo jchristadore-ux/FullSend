@@ -16,11 +16,23 @@ name: FullSend heartbeat
 #   Repo → Settings → Secrets and variables → Actions → New repository secret
 #     FULLSEND_URL     https://your-app.vercel.app
 #     FULLSEND_CRON_SECRET   the same value as CRON_SECRET in Vercel
+#
+# How often this really runs, which is not what the schedule below says.
+# GitHub throttles scheduled workflows on quiet repositories: the '*/5' entry
+# asks for every five minutes and is fired anywhere from 45 minutes to several
+# hours apart. Rather than pretend otherwise, the queue run stays up and
+# sweeps continuously until the next firing replaces it, so coverage comes
+# from the length of a run rather than the punctuality of the schedule.
+#
+# That is free on a public repository, where Actions minutes are unmetered. On
+# a PRIVATE repository those hours are billed against your Actions allowance —
+# shorten the sweep deadline below, or drive the queue from an external pinger
+# instead ("Driving the queue from outside GitHub" in the README).
 
 on:
   schedule:
-    # Every 5 minutes: drain the job queue and publish anything due.
-    # (GitHub's minimum interval is 5 minutes, and it may run late under load.)
+    # Drain the job queue and publish anything due. Asks for every five
+    # minutes; see the note above for what GitHub actually does with that.
     - cron: '*/5 * * * *'
     # Once a day: the full autopilot loop.
     - cron: '0 7 * * *'
@@ -37,9 +49,23 @@ on:
         type: choice
         options: [queue, publish, daily, weekly, health]
 
+# One sweeper at a time, and the newest one wins.
+#
+# The queue sweep below runs for hours rather than minutes, so without this a
+# schedule that fires while one is running would stack them up. Cancelling the
+# old one instead means each firing simply restarts the clock: however erratic
+# the schedule turns out to be, there is exactly one sweeper and it is always
+# the freshest. The other jobs get their own groups so a daily or weekly run
+# never cancels the sweeper.
+concurrency:
+  group: fullsend-heartbeat-${{ inputs.job || github.event.schedule }}
+  cancel-in-progress: true
+
 jobs:
   ping:
     runs-on: ubuntu-latest
+    # A sweep runs until GitHub's job ceiling or the next firing replaces it.
+    timeout-minutes: 350
     # Nothing here touches the repository.
     permissions: {}
     steps:
@@ -72,36 +98,91 @@ jobs:
             exit 1
           fi
 
+          # The response body goes to stdout so a caller can read it; anything
+          # meant for a human goes to stderr, which keeps `$(call queue)` clean
+          # enough to hand to jq.
           call() {
-            echo "── $1"
+            echo "── $1" >&2
             # --fail-with-body so a non-2xx surfaces the API's own explanation.
             curl --silent --show-error --fail-with-body \
                  --max-time 300 --retry 2 --retry-delay 10 \
                  -H "Authorization: Bearer $SECRET" \
                  "$URL/api/cron/$1"
-            echo
           }
 
           failed=0
           for job in $JOBS; do
             call "$job" || { echo "::error::$job failed"; failed=1; }
+            echo
           done
 
-          # GitHub does not honour '*/5' on a repository this quiet. The run
-          # history says these fire roughly hourly, which is the difference
-          # between a machine that keeps working after the browser closes and
-          # one that moves a single stage an hour. The schedule is not ours to
-          # fix, so each run covers the gap itself: keep calling for five
-          # minutes rather than calling once and exiting.
+          # ── The sweep ────────────────────────────────────────────────────
           #
-          # Each call is a bounded worker pass — at most one AI generation or
-          # one publish, then it returns — so this loop advances a pipeline by
-          # ten steps per run without any single request growing long enough to
-          # be killed.
+          # GitHub does not honour '*/5' on a repository this quiet. The run
+          # history on this one says these fire 45 minutes to 4 hours apart.
+          # That is not a schedule FullSend can be built on: a queue drained
+          # once every few hours is a machine that looks broken between
+          # drains, because it is not doing anything.
+          #
+          # The schedule is not ours to fix. The length of a run is. So a run
+          # does not do five minutes of work and exit — it stays up and keeps
+          # sweeping until GitHub's job ceiling or until the next firing
+          # cancels it (see `concurrency` above). Coverage then comes from the
+          # runs being long rather than from the schedule being punctual.
+          #
+          # This repository is public, so Actions minutes are free and
+          # unmetered. On a private repository they are not: see the README
+          # before leaving this running.
+          #
+          # Each call is still a bounded worker pass — a few AI generations at
+          # most, then it returns — so no single request ever grows long
+          # enough to be killed.
           if echo "$JOBS" | grep -q queue; then
-            for _ in 1 2 3 4 5 6 7 8 9; do
-              sleep 30
-              call queue || { echo "::error::queue sweep failed"; failed=1; }
+            # Poll briskly while there is work, and back off when there is
+            # none: an idle queue should cost the deployment one cheap request
+            # a minute, not one every fifteen seconds.
+            BUSY_SLEEP=15
+            IDLE_SLEEP=60
+            consecutive_failures=0
+
+            # Leaves margin under the job timeout so the run ends on its own
+            # terms rather than being killed mid-request.
+            deadline=$(( $(date +%s) + 340 * 60 ))
+
+            # Quiet variant: a six-hour loop logging every poll would bury the
+            # one line that matters. Only passes that did something are worth
+            # a line in the log.
+            sweep() {
+              curl --silent --show-error --fail-with-body \
+                   --max-time 300 --retry 2 --retry-delay 10 \
+                   -H "Authorization: Bearer $SECRET" \
+                   "$URL/api/cron/queue"
+            }
+
+            while [ "$(date +%s)" -lt "$deadline" ]; do
+              if body=$(sweep); then
+                consecutive_failures=0
+                processed=$(printf '%s' "$body" | jq -r '.processed // 0' 2>/dev/null || echo 0)
+                case "$processed" in ''|*[!0-9]*) processed=0 ;; esac
+                if [ "$processed" -gt 0 ]; then
+                  echo "$(date -u +%H:%M:%S) $body"
+                  sleep "$BUSY_SLEEP"
+                else
+                  sleep "$IDLE_SLEEP"
+                fi
+              else
+                # A blip is not worth failing a six-hour run over, but a
+                # deployment that is down, or a secret that is wrong, is —
+                # and it looks exactly like this, over and over.
+                consecutive_failures=$(( consecutive_failures + 1 ))
+                echo "::warning::queue sweep failed ($consecutive_failures in a row)"
+                if [ "$consecutive_failures" -ge 10 ]; then
+                  echo "::error::queue sweep failed 10 times in a row — check FULLSEND_URL and FULLSEND_CRON_SECRET"
+                  failed=1
+                  break
+                fi
+                sleep "$IDLE_SLEEP"
+              fi
             done
           fi
 
