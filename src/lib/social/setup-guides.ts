@@ -75,11 +75,21 @@ export const INSTAGRAM_SETUP: SetupGuide = {
       verifiable: true,
     },
     {
+      /*
+       * The default login mode is Instagram Login, and its redirect URI lives
+       * under the Instagram product — not under Facebook Login, which is where
+       * this step used to send people. Pasting it in the Facebook Login box
+       * leaves the Instagram one empty, and the connection then fails with a
+       * redirect-mismatch error that names neither screen.
+       */
       title: 'Add the OAuth redirect URI',
       detail:
-        'In your Meta app: Facebook Login → Settings → Valid OAuth Redirect URIs. Paste the URI ' +
-        'below exactly — Meta rejects the login if it does not match character for character.',
-      copyValues: [{ label: 'Valid OAuth Redirect URI', valueKey: 'instagram_redirect_uri' }],
+        'In your Meta app: Instagram → API setup with Instagram login → Business login settings ' +
+        '→ OAuth redirect URIs. Paste the URI below exactly — Meta rejects the login if it does ' +
+        'not match character for character, including the https and any trailing path. ' +
+        '(Only if you set META_LOGIN_MODE=facebook_login does it go under Facebook Login → ' +
+        'Settings instead.)',
+      copyValues: [{ label: 'OAuth redirect URI', valueKey: 'instagram_redirect_uri' }],
       verifiable: false,
     },
     {
@@ -98,9 +108,8 @@ export const INSTAGRAM_SETUP: SetupGuide = {
     {
       title: 'Connect your account in FullSend',
       detail:
-        'Come back to FullSend → Accounts and hit Connect Instagram. FullSend verifies the ' +
-        'account type, finds the linked Page, stores the token encrypted, and starts publishing ' +
-        'on schedule.',
+        'Come back to FullSend → Accounts and hit Connect Instagram. FullSend checks the account ' +
+        'is a Business account, stores the token encrypted, and starts publishing on schedule.',
       verifiable: true,
     },
   ],
