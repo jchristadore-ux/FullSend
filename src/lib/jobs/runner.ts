@@ -338,15 +338,6 @@ export interface QueueHealth {
     dueInSeconds: number;
     hasError: boolean;
   } | null;
-  /**
-   * How many jobs the claim's own query considers takeable, right now.
-   *
-   * The number that separates the two ways a queue stops. `queued` counts rows
-   * as the reader sees them; this counts them as the claim's filter sees them.
-   * When they disagree the query is wrong; when they agree and nothing is
-   * running, the compare-and-set is losing.
-   */
-  claimable: number | null;
   /** When a worker last finished anything. Null if one never has. */
   lastFinishedAt: string | null;
   secondsSinceLastFinished: number | null;
@@ -374,20 +365,10 @@ export async function queueHealth(): Promise<QueueHealth> {
     }
   }
 
-  // Never let the probe take down the report: a filter the database rejects is
-  // itself the answer, and it must arrive as `null` rather than a 500.
-  let claimable: number | null = null;
-  try {
-    claimable = await db().countClaimable(nowIso(), LOCK_TIMEOUT_MS);
-  } catch {
-    claimable = null;
-  }
-
   return {
     queued,
     running,
     dead,
-    claimable,
     oldestQueued: head
       ? {
           type: head.type,

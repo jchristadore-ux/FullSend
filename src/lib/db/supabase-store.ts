@@ -341,7 +341,18 @@ export class SupabaseStore implements Store {
     lockTimeoutMs: number,
     opts: ClaimOptions = {},
   ): Promise<Job | null> {
-    const query = this.claimableQuery(now, lockTimeoutMs, opts, '*');
+    const { projectId, createdBefore } = opts;
+    const staleBefore = new Date(Date.parse(now) - lockTimeoutMs).toISOString();
+
+    let query = this.client
+      .from('jobs')
+      .select('*')
+      .or(
+        `and(status.eq.queued,run_after.lte.${now}),` +
+          `and(status.eq.running,locked_at.lt.${staleBefore})`,
+      );
+    if (projectId) query = query.eq('project_id', projectId);
+    if (createdBefore) query = query.lte('created_at', createdBefore);
     /*
      * Several candidates, not one, and this is the difference between a queue
      * and a queue-shaped deadlock.
@@ -361,7 +372,7 @@ export class SupabaseStore implements Store {
      */
     const { data, error } = await query.order('run_after', { ascending: true }).limit(CLAIM_CANDIDATES);
     if (error) throw this.wrap(error, 'jobs');
-    const candidates = (data ?? []) as unknown as Job[];
+    const candidates = (data ?? []) as Job[];
 
     for (const candidate of candidates) {
       let claim = this.client
