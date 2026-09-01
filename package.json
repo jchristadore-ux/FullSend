@@ -2,7 +2,7 @@
   "name": "fullsend",
   "version": "0.1.0",
   "private": true,
-  "description": "FullSend \u2014 the autonomous marketing machine for app founders. Everything goes live.",
+  "description": "FullSend — the autonomous marketing machine for app founders. Everything goes live.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -14,7 +14,8 @@
     "e2e": "tsx --tsconfig tsconfig.scripts.json scripts/e2e.ts",
     "brand": "tsx --tsconfig tsconfig.scripts.json scripts/build-brand-assets.ts",
     "worker": "tsx --tsconfig tsconfig.scripts.json scripts/worker.ts",
-    "fixture:github": "tsx --tsconfig tsconfig.scripts.json scripts/fixture-github.ts"
+    "fixture:github": "tsx --tsconfig tsconfig.scripts.json scripts/fixture-github.ts",
+    "build:migrations": "tsx --tsconfig tsconfig.scripts.json scripts/build-migrations.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
@@ -22,6 +23,7 @@
     "@supabase/supabase-js": "^2.58.0",
     "next": "^16.3.2",
     "openai": "^6.2.0",
+    "pg": "^8.23.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "server-only": "^0.0.1",
@@ -32,6 +34,7 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.6",
     "@types/node": "^22.18.6",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
     "autoprefixer": "^10.4.21",

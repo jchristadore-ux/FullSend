@@ -276,18 +276,25 @@ export async function GET(): Promise<NextResponse> {
    * three separate faults.
    */
   if (schema.checked && schema.installed) {
+    // How to fix a missing migration depends on whether FullSend can reach the
+    // database directly. Saying "paste this into the SQL editor" to someone who
+    // has a button for it is worse advice than no advice.
+    const fix = env.supabase.dbUrl
+      ? 'Open the Control Room at /admin and press Apply under Database schema.'
+      : 'Run it in the Supabase SQL Editor, or set SUPABASE_DB_URL so FullSend can apply it itself.';
+
     if (publishingMigration.checked && !publishingMigration.applied) {
       problems.push(
-        'The durable-publishing columns are missing. Run supabase/migrations/0003_durable_publishing.sql ' +
-          'in the Supabase SQL Editor — without it a publish whose response is lost cannot be ' +
-          'recovered, and a retry could post the same content twice.',
+        'The durable-publishing columns are missing (supabase/migrations/0003_durable_publishing.sql). ' +
+          `${fix} Without it a publish whose response is lost cannot be recovered, and a retry ` +
+          'could post the same content twice.',
       );
     }
     if (analysisCommitMigration.checked && !analysisCommitMigration.applied) {
       problems.push(
-        'The analysis commit column is missing. Run supabase/migrations/0004_analysis_commit.sql ' +
-          'in the Supabase SQL Editor — without it FullSend cannot tell which commit it already ' +
-          'understood, and pays to analyse the same one again.',
+        'The analysis commit column is missing (supabase/migrations/0004_analysis_commit.sql). ' +
+          `${fix} Without it FullSend cannot tell which commit it already understood, and pays ` +
+          'to analyse the same one again.',
       );
     }
     if (creativeStorage.checked && !creativeStorage.exists) {
@@ -353,6 +360,8 @@ export async function GET(): Promise<NextResponse> {
         analysisCommit: analysisCommitMigration,
       },
       creativeStorage,
+      /** Whether FullSend can apply its own migrations, or needs a person to. */
+      canSelfMigrate: Boolean(env.supabase.dbUrl),
       capabilities: capabilities(),
       problems,
       /** Anything that would fail a TikTok or Meta app review. */

@@ -10,6 +10,7 @@ import { platformStatus } from '@/lib/social/registry';
 import { capabilities, env } from '@/lib/env';
 import { formatCompact, relativeTime } from '@/lib/dashboard';
 import { FullSendLockup } from '@/components/brand/Logo';
+import { MigrationsCard } from '@/components/app/MigrationsCard';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'FullSend Control Room' };
@@ -161,6 +162,8 @@ export default async function ControlRoom() {
             )}
           </section>
         </div>
+
+        <MigrationsCard />
 
         {/* Platform status. */}
         <section className="panel mt-6 p-5">
