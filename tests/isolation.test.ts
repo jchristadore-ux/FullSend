@@ -276,16 +276,17 @@ describe('background jobs', () => {
     expect(backoffSeconds(20)).toBe(3600);
   });
 
-  it('drains the queue and reports what happened', async () => {
+  it('processes one durable job per invocation and reports what happened', async () => {
     const sys = systemScope('test');
     for (let i = 0; i < 3; i++) {
       await enqueue(sys, 'collect_analytics', { projectId: project.id }, { projectId: project.id });
     }
     const result = await drainQueue({ max: 10 });
-    expect(result.processed).toBe(3);
+    expect(result.processed).toBe(1);
 
     const stats = await queueStats();
-    expect(stats.succeeded + stats.failed + stats.dead).toBe(3);
+    expect(stats.succeeded + stats.failed + stats.dead).toBe(1);
+    expect(stats.queued).toBe(2);
   });
 
   it('refuses cron requests without the shared secret', () => {
