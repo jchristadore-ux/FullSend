@@ -52,18 +52,33 @@ export function isStalled(job: JobProgress | null | undefined, now = Date.now())
     return Number.isFinite(claimed) && now - claimed > STALE_LOCK_MS;
   }
 
-  /*
-   * A queued job is stuck too, and this is the case that had no way out at
-   * all: nothing claimed it, so there was no lock to expire, and the stage sat
-   * on "Working" with no button under it for as long as anyone watched. If the
-   * queue has not reached a job in twice the lock timeout, it is not going to
-   * on its own.
-   */
-  if (job.status === 'queued' && job.updatedAt) {
-    const touched = Date.parse(job.updatedAt);
-    return Number.isFinite(touched) && now - touched > STALE_LOCK_MS * 2;
-  }
   return false;
+}
+
+/**
+ * A job sitting in the queue that no worker has reached yet.
+ *
+ * This is NOT a failure, and calling it one was its own bug. A queued job with
+ * no attempts has not gone wrong — nothing has touched it. What its age
+ * measures is how often the queue gets drained, and that is a property of the
+ * deployment's scheduler, not of the job.
+ *
+ * The number matters because the honest answer is uncomfortable: the GitHub
+ * Actions heartbeat asks for every five minutes and is actually fired every
+ * one to four hours on a quiet repository. Against that, treating six minutes
+ * of waiting as death marked healthy work failed, and the onboarding screen
+ * stops polling on a failed stage — which stopped the only other thing
+ * draining the queue. Waiting was converted into the failure it was mistaken
+ * for.
+ *
+ * So this reports "queued, not yet reached" for the UI to say plainly. Whether
+ * anything is draining the queue at all is a deployment-wide question, and it
+ * is answered where it can be answered precisely — the Control Room and
+ * /api/health — not guessed at from one row's timestamp.
+ */
+export function isWaitingForWorker(job: JobProgress | null | undefined): boolean {
+  if (!job) return false;
+  return job.status === 'queued' && (job.attempts ?? 0) === 0 && !job.error;
 }
 
 export function hasFailed(job: JobProgress | null | undefined): boolean {

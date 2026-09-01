@@ -18,6 +18,8 @@ interface Stage {
   status: 'complete' | 'in_progress' | 'failed' | 'waiting' | 'not_started';
   detail: string | null;
   error: string | null;
+  /** Why an unfinished stage is not moving, when nothing is wrong. */
+  note: string | null;
   retryable: boolean;
 }
 
@@ -138,6 +140,12 @@ export function PipelineCard({ projectId }: { projectId: string }) {
                 // and half of it is no use at all.
                 <p className="mt-1 whitespace-pre-wrap break-words text-xs text-warn">
                   {stage.error}
+                </p>
+              ) : stage.note ? (
+                // Waiting, not broken. Dimmed rather than warned, because the
+                // colour is the whole message to someone scanning the list.
+                <p className="mt-1 whitespace-pre-wrap break-words text-xs text-dimmer">
+                  {stage.note}
                 </p>
               ) : (
                 stage.detail && <p className="mt-1 truncate text-xs text-dimmer">{stage.detail}</p>

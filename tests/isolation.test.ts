@@ -10,7 +10,16 @@ import { createProject, createUser, setupContext, teardown, type TestContext } f
 import { db, enqueue } from '@/lib/db/repo';
 import { systemScope, userScope, TENANT_KEY, type TableName } from '@/lib/db';
 import { newId, nowIso } from '@/lib/ids';
-import { backoffSeconds, cronSecretValid, drainQueue, HEAVY_JOBS, queueStats, runJob } from '@/lib/jobs/runner';
+import {
+  backoffSeconds,
+  CRON_MAX_HEAVY_PER_PASS,
+  cronSecretValid,
+  drainQueue,
+  HEAVY_JOB_RESERVE_MS,
+  HEAVY_JOBS,
+  queueStats,
+  runJob,
+} from '@/lib/jobs/runner';
 import { check, LIMITS, remaining, resetLimits } from '@/lib/rate-limit';
 import { extractJson } from '@/lib/ai/client';
 import { FULLSEND_VOICE } from '@/lib/brand/fullsend-brand';
@@ -303,6 +312,63 @@ describe('background jobs', () => {
     expect(result.processed).toBe(1);
     expect(result.stopped).toBe('heavy');
     expect((await queueStats()).queued).toBe(2);
+  });
+
+  /*
+   * The cron pass is allowed more than one, and this is why it has to be.
+   *
+   * A post is one heavy job now, so a month of content is tens of them. At one
+   * per pass, against a GitHub Actions cron that actually fires every one to
+   * four hours rather than the five minutes it asks for, a calendar took most
+   * of a day. The invocation has 300 seconds and was using a few of them.
+   */
+  it('runs the whole heavy allowance when the caller has the budget for it', async () => {
+    const sys = systemScope('test');
+    const waiting = CRON_MAX_HEAVY_PER_PASS + 2;
+    for (let i = 0; i < waiting; i++) {
+      await enqueue(sys, 'generate_content', { projectId: project.id }, { projectId: project.id });
+    }
+    const result = await drainQueue({
+      max: 25,
+      budgetMs: 200_000,
+      maxHeavy: CRON_MAX_HEAVY_PER_PASS,
+    });
+    expect(result.processed).toBe(CRON_MAX_HEAVY_PER_PASS);
+    expect(result.stopped).toBe('heavy');
+    expect((await queueStats()).queued).toBe(waiting - CRON_MAX_HEAVY_PER_PASS);
+  });
+
+  /*
+   * The bound and the invocation it has to fit inside, held together. A cron
+   * pass reserves for the slowest job before each claim, so the worst case is
+   * the last one starting just inside the budget and running the full provider
+   * timeout — and that has to land well short of `maxDuration`.
+   */
+  it('keeps the cron heavy allowance inside the invocation it runs in', () => {
+    const CRON_MAX_DURATION_MS = 300_000;
+    const CRON_DRAIN_BUDGET_MS = 200_000;
+    const worstCase = CRON_DRAIN_BUDGET_MS + HEAVY_JOB_RESERVE_MS;
+    expect(worstCase).toBeLessThan(CRON_MAX_DURATION_MS);
+    // And the allowance is worth having: more than the one-at-a-time it was.
+    expect(CRON_MAX_HEAVY_PER_PASS).toBeGreaterThan(1);
+  });
+
+  /*
+   * A pass that may claim a second heavy job cannot know the next claim is
+   * cheap, so it must keep back enough for the longest one. Getting this wrong
+   * is how an invocation is killed mid-job and leaves a claimed row stranded —
+   * which the pipeline then has to describe to somebody.
+   */
+  it('will not start another job without room for the slowest one', async () => {
+    const sys = systemScope('test');
+    for (let i = 0; i < 3; i++) {
+      await enqueue(sys, 'generate_content', { projectId: project.id }, { projectId: project.id });
+    }
+    // Comfortably more than the light-job headroom, far less than a heavy job.
+    const result = await drainQueue({ max: 10, budgetMs: 20_000, maxHeavy: 4 });
+    expect(result.processed).toBe(0);
+    expect(result.stopped).toBe('budget');
+    expect((await queueStats()).queued).toBe(3);
   });
 
   it('never follows a chain into a second stage in the same pass', async () => {
