@@ -9,7 +9,7 @@
  * await fails it the same way it failed in production.
  */
 import { describe, expect, it } from 'vitest';
-import { SupabaseStore } from '@/lib/db/supabase-store';
+import { CLAIM_CANDIDATES, SupabaseStore } from '@/lib/db/supabase-store';
 import { systemScope, userScope } from '@/lib/db';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -127,6 +127,62 @@ describe('claiming a job', () => {
     locked_at: null,
     run_after: '2026-01-01T00:00:00.000Z',
   };
+
+  /*
+   * The bug this exists to prevent coming back, and it was not a small one.
+   *
+   * The claim selected exactly one candidate — the oldest due job — and if
+   * that row could not be claimed, returned nothing. So a single stuck row was
+   * never one stuck job: it was a stopped queue, for every project, for as
+   * long as the row sat there. In production one `generate_strategy` job did
+   * exactly that, and nothing else ran for four hours behind it.
+   */
+  it('looks past a row it cannot claim instead of stopping the queue', async () => {
+    const blocked = { ...JOB, id: 'blocked', run_after: '2026-01-01T00:00:00.000Z' };
+    const behind = { ...JOB, id: 'behind', run_after: '2026-01-01T00:01:00.000Z' };
+
+    const calls: Call[] = [];
+    let claimAttempts = 0;
+    const client = {
+      from(table: string) {
+        calls.push({ method: 'from', args: [table] });
+        const self: Record<string, unknown> = {};
+        for (const m of ['select', 'eq', 'in', 'is', 'gte', 'lte', 'lt', 'or', 'update', 'order', 'limit', 'range']) {
+          self[m] = (...args: unknown[]) => {
+            calls.push({ method: m, args });
+            return self;
+          };
+        }
+        // The claim: the first row refuses, the one behind it accepts.
+        self.maybeSingle = () => {
+          claimAttempts++;
+          return Promise.resolve({ data: claimAttempts === 1 ? null : behind, error: null });
+        };
+        self.then = (resolve: (v: unknown) => unknown) =>
+          Promise.resolve({ data: [blocked, behind], error: null, count: 2 }).then(resolve);
+        return self;
+      },
+    } as unknown as SupabaseClient;
+
+    const claimed = await new SupabaseStore(client).claimNextJob(
+      '2026-01-02T00:00:00.000Z',
+      60_000,
+    );
+
+    expect(claimed?.id).toBe('behind');
+    expect(claimAttempts).toBe(2);
+  });
+
+  it('asks for more than one candidate so there is something to fall past', async () => {
+    const { client, calls } = fakeClient([JOB]);
+    const store = new SupabaseStore(client);
+
+    await store.claimNextJob('2026-01-02T00:00:00.000Z', 60_000);
+
+    const limits = calls.filter((c) => c.method === 'limit');
+    expect(limits.some((c) => c.args[0] === CLAIM_CANDIDATES)).toBe(true);
+    expect(CLAIM_CANDIDATES).toBeGreaterThan(1);
+  });
 
   it('compares an unlocked job against null', async () => {
     const { client, calls } = fakeClient([JOB]);

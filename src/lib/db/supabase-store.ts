@@ -21,6 +21,15 @@ import {
   type TenantScope,
 } from './store';
 
+/**
+ * How far down the queue a single claim will look for something it can take.
+ *
+ * Small: this is a fallback past a blocked row, not a batch size. One extra
+ * round trip per blocked job is the price, and the alternative — stopping at
+ * the first row that will not budge — stops the whole deployment.
+ */
+export const CLAIM_CANDIDATES = 10;
+
 /** A tenant restriction as plain data, so it never travels as a query builder. */
 type ScopeFilter =
   | { kind: 'unrestricted' }
@@ -309,21 +318,38 @@ export class SupabaseStore implements Store {
   ): Promise<Job | null> {
     const { projectId, createdBefore } = opts;
     const staleBefore = new Date(Date.parse(now) - lockTimeoutMs).toISOString();
-    for (let attempt = 0; attempt < 5; attempt++) {
-      let query = this.client
-        .from('jobs')
-        .select('*')
-        .or(
-          `and(status.eq.queued,run_after.lte.${now}),` +
-            `and(status.eq.running,locked_at.lt.${staleBefore})`,
-        );
-      if (projectId) query = query.eq('project_id', projectId);
-      if (createdBefore) query = query.lte('created_at', createdBefore);
-      const { data, error } = await query.order('run_after', { ascending: true }).limit(1);
-      if (error) throw this.wrap(error, 'jobs');
-      const candidate = (data ?? [])[0] as Job | undefined;
-      if (!candidate) return null;
 
+    let query = this.client
+      .from('jobs')
+      .select('*')
+      .or(
+        `and(status.eq.queued,run_after.lte.${now}),` +
+          `and(status.eq.running,locked_at.lt.${staleBefore})`,
+      );
+    if (projectId) query = query.eq('project_id', projectId);
+    if (createdBefore) query = query.lte('created_at', createdBefore);
+    /*
+     * Several candidates, not one, and this is the difference between a queue
+     * and a queue-shaped deadlock.
+     *
+     * Asking for `.limit(1)` meant every claim in the deployment looked at the
+     * same single row: the oldest due job. A row that cannot be claimed —
+     * whatever the reason — was therefore not one stuck job, it was a stopped
+     * queue, for every project, permanently. That is exactly what happened
+     * here: one `generate_strategy` job sat at the head of the queue, due and
+     * unclaimed for eight hours, and nothing behind it ran for four.
+     *
+     * The retry loop made it worse rather than better, because all five
+     * attempts re-selected the same blocked row.
+     *
+     * A worker now walks the head of the queue until something claims, so a
+     * row it cannot take costs one attempt instead of the whole pass.
+     */
+    const { data, error } = await query.order('run_after', { ascending: true }).limit(CLAIM_CANDIDATES);
+    if (error) throw this.wrap(error, 'jobs');
+    const candidates = (data ?? []) as Job[];
+
+    for (const candidate of candidates) {
       let claim = this.client
         .from('jobs')
         .update({
@@ -357,7 +383,7 @@ export class SupabaseStore implements Store {
       const { data: claimed, error: claimErr } = await claim.select().maybeSingle();
       if (claimErr) throw this.wrap(claimErr, 'jobs');
       if (claimed) return claimed as Job;
-      // Lost the race; look for the next one.
+      // Lost the race, or this row will not budge. Either way, try the next.
     }
     return null;
   }
