@@ -7,7 +7,7 @@ import {
   ensureBrandProfile,
   normaliseMix,
 } from '@/lib/strategy/build';
-import { generateContent } from '@/lib/content/generate';
+import { CONTENT_BATCH_SIZE, generateContent } from '@/lib/content/generate';
 import { allocate, planSlots, shiftMix, formatFor } from '@/lib/content/mix';
 import { checkDuplicate, contentFingerprint, similarity } from '@/lib/content/dedup';
 import { openSlots } from '@/lib/scheduler/schedule';
@@ -330,6 +330,26 @@ describe('content generation', () => {
     return { analyzed, built, strategy };
   }
 
+  /**
+   * Fills a whole window, the way the product does.
+   *
+   * `generateContent` writes one batch and hands the rest of the slots back;
+   * the queued follow-up job picks them up. Tests that are about the content
+   * rather than about the batching need the finished calendar, so this stands
+   * in for that chain and runs it to the end.
+   */
+  async function generateAll(
+    input: Omit<Parameters<typeof generateContent>[1], 'slots'>,
+    slots: Awaited<ReturnType<typeof openSlots>>,
+  ) {
+    const created = [];
+    for (let done = 0; done < slots.length; done += CONTENT_BATCH_SIZE) {
+      const result = await generateContent(ctx.scope, { ...input, slots: slots.slice(done) });
+      created.push(...result.created);
+    }
+    return { created };
+  }
+
   it('produces complete, publishable posts', async () => {
     const { analyzed, built, strategy } = await fullSetup();
     const slots = await openSlots(ctx.scope, {
@@ -339,16 +359,18 @@ describe('content generation', () => {
       platforms: ['instagram', 'tiktok'],
     });
 
-    const result = await generateContent(ctx.scope, {
-      project,
-      analysis: analyzed.analysis,
-      brand: built.brand!,
-      strategy,
-      personas: [],
-      pillars: built.pillars,
-      campaigns: built.campaigns,
+    const result = await generateAll(
+      {
+        project,
+        analysis: analyzed.analysis,
+        brand: built.brand!,
+        strategy,
+        personas: [],
+        pillars: built.pillars,
+        campaigns: built.campaigns,
+      },
       slots,
-    });
+    );
 
     expect(result.created.length).toBeGreaterThan(3);
     for (const item of result.created) {
@@ -373,17 +395,20 @@ describe('content generation', () => {
       days: 30,
       platforms: ['instagram', 'tiktok'],
     });
-    const result = await generateContent(ctx.scope, {
-      project,
-      analysis: analyzed.analysis,
-      brand: built.brand!,
-      strategy,
-      personas: [],
-      pillars: built.pillars,
-      campaigns: built.campaigns,
+    const result = await generateAll(
+      {
+        project,
+        analysis: analyzed.analysis,
+        brand: built.brand!,
+        strategy,
+        personas: [],
+        pillars: built.pillars,
+        campaigns: built.campaigns,
+      },
       slots,
-    });
+    );
 
+    expect(result.created.length).toBeGreaterThan(3);
     for (const item of result.created) {
       if (item.format === 'carousel') {
         expect(item.slides?.length ?? 0).toBeGreaterThanOrEqual(2);

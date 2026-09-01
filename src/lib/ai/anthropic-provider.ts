@@ -3,10 +3,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { env } from '../env';
 import { FullSendError } from '../errors';
 import { isBillingFailure, providerMessage } from './provider-errors';
+import { ANTHROPIC_REQUEST_TIMEOUT_MS as REQUEST_TIMEOUT_MS } from './limits';
 import { ANTHROPIC_MODELS, estimateCost } from './pricing';
 import type { AiProvider, CompletionRequest, CompletionResponse, ModelTier } from './types';
-
-const REQUEST_TIMEOUT_MS = 40_000;
 
 export class AnthropicProvider implements AiProvider {
   readonly name = 'anthropic'; readonly live: boolean; private client: Anthropic | null = null;

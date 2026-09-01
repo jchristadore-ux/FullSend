@@ -26,7 +26,7 @@ Non-negotiable:
 - Every post gets exactly one call to action.
 - Hashtags are relevant and specific. No hashtag soup.
 - For video formats, write the full scene-by-scene plan with real timings.
-- Each post must be meaningfully different from the others in this batch.
+- Each post must be meaningfully different from every hook already written for this project, which you are given.
 
 Return JSON only.`;
 
@@ -35,12 +35,56 @@ export interface GenerateContentResult { created: ContentItem[]; rejectedDuplica
 /**
  * Posts per AI call, and per durable job.
  *
- * Thirty posts are never one request. Six is small enough that a batch fits
- * comfortably inside a single model response and a single worker pass, and
- * each item is written to the database as it is produced — so a batch that
- * fails half-way keeps the posts it already wrote, and only the rest is retried.
+ * One. Not an arbitrary choice — it is what fits.
+ *
+ * A single post can carry a twelve-scene video plan, a 3000-character
+ * narration script and twelve carousel slides, so it costs well over a
+ * thousand output tokens. Six of them was ~9000, which is both longer than the
+ * provider's 40-second timeout can produce and right at the token ceiling — so
+ * the call either timed out or came back truncated mid-JSON. Both were seen in
+ * production, from the same cause.
+ *
+ * At one post per call the request finishes in a fraction of the timeout with
+ * room to spare, and the failure unit shrinks to a single post: if the
+ * seventeenth fails, sixteen are already saved and only the seventeenth is
+ * retried. The job chain fills the rest of the calendar a post at a time.
+ *
+ * Raising this means keeping the batch's output inside the provider timeout
+ * too. The two are not independent, and `tests/content-batch-sizing.test.ts`
+ * holds them together.
  */
-export const CONTENT_BATCH_SIZE = 6;
+export const CONTENT_BATCH_SIZE = 1;
+
+/**
+ * Output ceiling for one post: what it is *allowed* to spend.
+ *
+ * Generous rather than exact — a reel with a full scene plan and a carousel's
+ * worth of slides is a long way above an average post, and truncating one is
+ * worse than paying for headroom that goes unused. It is not the schema's
+ * theoretical maximum: a post that used every cap the schema permits would
+ * come to something like 9000 tokens, which cannot be produced inside the
+ * provider timeout at any batch size. If truncation is ever seen again, the
+ * fix is a tighter schema cap, not a larger budget here — a larger budget
+ * walks straight back into the timeout.
+ */
+export const PER_POST_TOKENS = 3000;
+
+/**
+ * What a post actually costs, as opposed to what it may cost.
+ *
+ * This is the number the timeout has to be sized against, and it is why six
+ * posts a batch failed: not because the batch hit its 9000-token ceiling, but
+ * because six real posts came to enough output that 40 seconds ran out first.
+ */
+export const TYPICAL_POST_TOKENS = 1200;
+
+/** The output budget for a batch of `posts`, with slack for the JSON envelope. */
+export function contentMaxTokens(posts: number): number {
+  return PER_POST_TOKENS * posts + 500;
+}
+
+/** The largest output any single content generation will ask for. */
+export const MAX_CONTENT_OUTPUT_TOKENS = contentMaxTokens(CONTENT_BATCH_SIZE);
 
 export async function generateContent(scope: TenantScope, input: GenerateContentInput): Promise<GenerateContentResult> {
   const { project, analysis, brand, strategy, personas, pillars, campaigns, slots } = input;
@@ -55,7 +99,7 @@ export async function generateContent(scope: TenantScope, input: GenerateContent
   const { data, costUsd: batchCost } = await generateObject({
     task: 'content.batch', system: CONTENT_SYSTEM, brief: input.brief ?? `Write ${briefs.length} Instagram posts for ${project.name}. Each must be publishable as-is.`,
     context: { project_name: project.name, analysis: { one_liner: analysis.one_liner, what_it_does: analysis.what_it_does, category: analysis.category, features: analysis.features, not_capabilities: analysis.not_capabilities, differentiators: analysis.differentiators, problem_solved: analysis.problem_solved, tech_stack: analysis.tech_stack, screens: analysis.screens }, brand: { voice: brand.voice, tone_attributes: brand.tone_attributes, messaging_pillars: brand.messaging_pillars, words_to_use: brand.words_to_use, words_to_avoid: brand.words_to_avoid, ctas: brand.ctas, emoji_policy: brand.emoji_policy, terminology: brand.terminology }, strategy: { positioning: strategy.positioning, value_proposition: strategy.value_proposition, cta_strategy: strategy.cta_strategy }, personas: personas.map((p) => ({ name: p.name, role: p.role, pain_points: p.pain_points, objections: p.objections, tone_preference: p.tone_preference })), existing_hooks: existing.slice(-40).map((c) => c.hook), briefs },
-    schema: contentBatchSchema, noCache: true, maxTokens: 9000, attribution: { scope, projectId: project.id, userId: project.user_id },
+    schema: contentBatchSchema, noCache: true, maxTokens: contentMaxTokens(batch.length), attribution: { scope, projectId: project.id, userId: project.user_id },
   });
   costUsd += batchCost;
   for (let i = 0; i < batch.length; i++) {

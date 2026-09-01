@@ -3,11 +3,11 @@ import OpenAI from 'openai';
 import { env } from '../env';
 import { FullSendError } from '../errors';
 import { isBillingFailure, providerMessage } from './provider-errors';
+import { OPENAI_REQUEST_TIMEOUT_MS as REQUEST_TIMEOUT_MS } from './limits';
 import { estimateCost, OPENAI_MODELS } from './pricing';
 import type { AiProvider, CompletionRequest, CompletionResponse, ModelTier } from './types';
 
 /** OpenAI adapter. Same contract as the Anthropic one; routing picks between them. */
-const REQUEST_TIMEOUT_MS = 25_000;
 
 export class OpenAiProvider implements AiProvider {
   readonly name = 'openai';

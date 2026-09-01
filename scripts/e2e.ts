@@ -19,13 +19,13 @@
 import './script-env';
 
 import { setStore, MemoryStore, systemScope, userScope } from '../src/lib/db';
-import { db } from '../src/lib/db/repo';
+import { db, enqueueOnce } from '../src/lib/db/repo';
 import { newId, nowIso } from '../src/lib/ids';
 import { installMockAdapters } from '../src/lib/social/registry';
 import { completeConnection } from '../src/lib/social/connections';
 import { analyzeRepository } from '../src/lib/analysis/analyze';
 import { approveStrategy, buildStrategy, ensureBrandProfile } from '../src/lib/strategy/build';
-import { generateContent } from '../src/lib/content/generate';
+import { CONTENT_BATCH_SIZE, generateContent } from '../src/lib/content/generate';
 import { openSlots, queueDepth, scheduleContent } from '../src/lib/scheduler/schedule';
 import { publishScheduledPost } from '../src/lib/publish/publish';
 import { collectAnalytics, postPerformance, summarise } from '../src/lib/analytics/collect';
@@ -37,7 +37,7 @@ import { generateWeeklyReport } from '../src/lib/automation/weekly-report';
 import { drainQueue } from '../src/lib/jobs/runner';
 import { seedFullSendProject } from '../src/lib/seed/fullsend-project';
 import { GitHubClient } from '../src/lib/github/client';
-import type { Platform } from '../src/lib/types';
+import type { ContentItem, Platform } from '../src/lib/types';
 
 /* ── Output helpers ─────────────────────────────────────────────────────── */
 
@@ -299,16 +299,28 @@ ${X}`);
 
   /* 6. Content + creative + QC. */
   stage('Content generation → creative → quality control');
-  const generated = await generateContent(scope, {
-    project,
-    analysis,
-    brand: built.brand!,
-    strategy,
-    personas: [],
-    pillars: built.pillars,
-    campaigns: built.campaigns,
-    slots,
-  });
+  /*
+   * One call writes one post and hands the remaining slots back; in the
+   * product a queued job picks them up. This script is the whole machine end
+   * to end, so it plays that chain out — everything downstream (analytics, the
+   * optimizer, its experiments) needs a calendar to read, not a single post.
+   */
+  const generated = { created: [] as ContentItem[], rejectedDuplicates: 0, blockedByQc: 0 };
+  for (let done = 0; done < slots.length; done += CONTENT_BATCH_SIZE) {
+    const batch = await generateContent(scope, {
+      project,
+      analysis,
+      brand: built.brand!,
+      strategy,
+      personas: [],
+      pillars: built.pillars,
+      campaigns: built.campaigns,
+      slots: slots.slice(done),
+    });
+    generated.created.push(...batch.created);
+    generated.rejectedDuplicates += batch.rejectedDuplicates;
+    generated.blockedByQc += batch.blockedByQc;
+  }
   check(generated.created.length > 0, 'Posts generated', `${generated.created.length} posts`);
   ok('Duplicates rejected', `${generated.rejectedDuplicates} near-duplicates blocked`);
   ok('Held by QC', `${generated.blockedByQc} routed to human review`);
@@ -485,7 +497,23 @@ ${X}`);
   const before = await db().count(scope, 'content_items', { where: { project_id: project.id } });
   // The 30-day window is already full, so extend the horizon — this is what the
   // autopilot does when runway gets short.
+  //
+  // Queued rather than called directly, and then drained: one batch is one
+  // post, and whether that post survives the duplicate guard is not the
+  // question here. What is being checked is that the chain fills the extended
+  // window, which is the job's work and not one call's.
   const topUp = await topUpContent(scope, project, 60, 'More of whatever is winning');
+  await enqueueOnce(
+    scope,
+    'generate_content',
+    { projectId: project.id, days: 60, brief: 'More of whatever is winning', batch: 1 },
+    { projectId: project.id, dedupeKey: `${project.id}:content:60:1` },
+  );
+  let topUpPasses = 0;
+  while (topUpPasses++ < 40) {
+    const pass = await drainQueue({ projectId: project.id, max: 10, maxHeavy: 4 });
+    if (pass.processed === 0) break;
+  }
   const after = await db().count(scope, 'content_items', { where: { project_id: project.id } });
   check(after > before, 'New content generated', `${before} → ${after} posts (${topUp.reason})`);
   ok('Duplicate guard held', `${topUp.rejectedDuplicates} rejected as too similar`);
