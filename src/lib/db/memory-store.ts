@@ -247,6 +247,22 @@ export class MemoryStore implements Store {
     return rows.length;
   }
 
+  async countClaimable(
+    now: string,
+    lockTimeoutMs: number,
+    opts: ClaimOptions = {},
+  ): Promise<number> {
+    const { projectId, createdBefore } = opts;
+    const staleBefore = new Date(Date.parse(now) - lockTimeoutMs).toISOString();
+    return ([...this.table('jobs').values()] as unknown as Job[]).filter(
+      (j) =>
+        (!projectId || j.project_id === projectId) &&
+        (!createdBefore || j.created_at <= createdBefore) &&
+        ((j.status === 'queued' && j.run_after <= now) ||
+          (j.status === 'running' && j.locked_at !== null && j.locked_at < staleBefore)),
+    ).length;
+  }
+
   async claimNextJob(
     now: string,
     lockTimeoutMs: number,

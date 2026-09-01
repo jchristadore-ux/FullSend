@@ -197,5 +197,17 @@ export interface Store {
     opts?: ClaimOptions,
   ): Promise<Job | null>;
 
+  /**
+   * How many jobs the claim's own query considers takeable right now.
+   *
+   * The same filter `claimNextJob` selects with, counted rather than claimed.
+   * It exists because "the queue is not moving" has two very different causes
+   * that look identical from outside: the query finding nothing, or the
+   * compare-and-set refusing everything it finds. Reading the rows in
+   * JavaScript cannot tell them apart — the question is what the *database*
+   * returns for that filter, so the only honest answer runs it.
+   */
+  countClaimable(now: string, lockTimeoutMs: number, opts?: ClaimOptions): Promise<number>;
+
   reset?(): Promise<void>;
 }
