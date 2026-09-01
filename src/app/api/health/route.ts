@@ -97,14 +97,18 @@ type Migration =
   | { checked: true; applied: boolean; error?: string };
 
 /**
- * Asks whether the durable-publishing columns are actually in the database.
+ * Asks whether a migration's columns are actually in the database.
  *
  * A migration file in the repository is not a migration in Postgres, and the
- * gap between them is invisible until the first publish — at which point the
- * publisher cannot record the container id it needs to avoid publishing the
- * same post twice. Selecting the column is the only honest way to know.
+ * gap between them is invisible until the feature that needs it runs — at
+ * which point the failure describes a symptom rather than the missing column.
+ * Asking Postgres for the column is the only honest way to know.
+ *
+ * Every migration past the initial schema gets one of these. A check that
+ * covers some of them and not others is worse than none: it reads as "all
+ * clear" while the unchecked one is missing.
  */
-async function checkPublishingMigration(): Promise<Migration> {
+async function checkColumns(table: string, columns: string[]): Promise<Migration> {
   const { url, serviceRoleKey } = env.supabase;
   if (!url) return { checked: false, reason: 'NEXT_PUBLIC_SUPABASE_URL is not set' };
   if (!serviceRoleKey) return { checked: false, reason: 'SUPABASE_SERVICE_ROLE_KEY is not set' };
@@ -112,7 +116,7 @@ async function checkPublishingMigration(): Promise<Migration> {
   const base = url.replace(/\/+$/, '');
   try {
     const res = await fetch(
-      `${base}/rest/v1/scheduled_posts?select=platform_container_id,publish_submitted_at&limit=1`,
+      `${base}/rest/v1/${table}?select=${columns.join(',')}&limit=1`,
       {
         headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}` },
         signal: AbortSignal.timeout(REACHABILITY_TIMEOUT_MS),
@@ -126,6 +130,13 @@ async function checkPublishingMigration(): Promise<Migration> {
     return { checked: true, applied: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/** 0003 — without it, a publish whose response is lost cannot be recovered. */
+const checkPublishingMigration = () =>
+  checkColumns('scheduled_posts', ['platform_container_id', 'publish_submitted_at']);
+
+/** 0004 — without it, the same commit is analysed again on every retry. */
+const checkAnalysisCommitMigration = () => checkColumns('product_analysis', ['commit_sha']);
 
 type Storage =
   | { checked: false; reason: string }
@@ -221,12 +232,14 @@ async function checkTikTokFile(): Promise<TikTokFile> {
 }
 
 export async function GET(): Promise<NextResponse> {
-  const [supabase, schema, publishingMigration, creativeStorage] = await Promise.all([
-    reachSupabase(),
-    checkSchema(),
-    checkPublishingMigration(),
-    checkCreativeStorage(),
-  ]);
+  const [supabase, schema, publishingMigration, analysisCommitMigration, creativeStorage] =
+    await Promise.all([
+      reachSupabase(),
+      checkSchema(),
+      checkPublishingMigration(),
+      checkAnalysisCommitMigration(),
+      checkCreativeStorage(),
+    ]);
 
   const required = {
     NEXT_PUBLIC_APP_URL: set(live('NEXT_PUBLIC_APP_URL')),
@@ -268,6 +281,13 @@ export async function GET(): Promise<NextResponse> {
         'The durable-publishing columns are missing. Run supabase/migrations/0003_durable_publishing.sql ' +
           'in the Supabase SQL Editor — without it a publish whose response is lost cannot be ' +
           'recovered, and a retry could post the same content twice.',
+      );
+    }
+    if (analysisCommitMigration.checked && !analysisCommitMigration.applied) {
+      problems.push(
+        'The analysis commit column is missing. Run supabase/migrations/0004_analysis_commit.sql ' +
+          'in the Supabase SQL Editor — without it FullSend cannot tell which commit it already ' +
+          'understood, and pays to analyse the same one again.',
       );
     }
     if (creativeStorage.checked && !creativeStorage.exists) {
@@ -328,7 +348,10 @@ export async function GET(): Promise<NextResponse> {
       supabase,
       schema,
       /** Whether each migration beyond the initial schema is actually applied. */
-      migrations: { durablePublishing: publishingMigration },
+      migrations: {
+        durablePublishing: publishingMigration,
+        analysisCommit: analysisCommitMigration,
+      },
       creativeStorage,
       capabilities: capabilities(),
       problems,
