@@ -68,7 +68,9 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
   const [remedy, setRemedy] = useState<string | null>(null);
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const movedAtRef = useRef(Date.now());
+  // Set when polling starts, not at render: reading the clock during render is
+  // impure, and the value is meaningless until there is a run to time.
+  const movedAtRef = useRef(0);
   const lastStepRef = useRef(0);
 
   const stopPolling = useCallback(() => {
@@ -122,7 +124,7 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
           return;
         }
 
-        if (Date.now() - movedAtRef.current > STALL_MS) {
+        if (movedAtRef.current > 0 && Date.now() - movedAtRef.current > STALL_MS) {
           stopPolling();
           const stuck = pipe.stages.find((st) => st.status !== 'complete');
           setError(`FullSend got stuck on "${stuck?.label ?? 'the pipeline'}".`);

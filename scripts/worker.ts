@@ -12,7 +12,7 @@ import './script-env';
 import { systemScope } from '../src/lib/db';
 import { db, enqueue } from '../src/lib/db/repo';
 import { drainQueue, queueStats } from '../src/lib/jobs/runner';
-import { projectsForAutopilot, publishDuePosts } from '../src/lib/automation/autopilot';
+import { enqueueDuePublishJobs, projectsForAutopilot } from '../src/lib/automation/autopilot';
 import { nowIso } from '../src/lib/ids';
 
 const QUEUE_INTERVAL_MS = 30_000;
@@ -24,7 +24,6 @@ let running = true;
 
 function log(message: string, meta?: Record<string, unknown>): void {
   const line = { ts: nowIso(), scope: 'worker', message, ...(meta ? { meta } : {}) };
-  // eslint-disable-next-line no-console
   console.log(JSON.stringify(line));
 }
 
@@ -58,14 +57,16 @@ async function main(): Promise<void> {
 
   const timers = [
     setInterval(() => {
-      void drainQueue({ max: 20, budgetMs: 25_000 }).then((r) => {
-        if (r.processed) log('queue drained', r);
+      void drainQueue({ max: 20, budgetMs: QUEUE_INTERVAL_MS - 5_000 }).then((r) => {
+        if (r.processed) log('queue drained', { ...r });
       });
     }, QUEUE_INTERVAL_MS),
 
     setInterval(() => {
-      void publishDuePosts(40).then((r) => {
-        if (r.published || r.failed) log('publish sweep', r);
+      // Writes jobs; the queue drain above does the publishing, one post per
+      // pass. Two loops that both publish would race and post twice.
+      void enqueueDuePublishJobs(50).then((r) => {
+        if (r.queued) log('publish jobs queued', r);
       });
     }, PUBLISH_INTERVAL_MS),
 
@@ -86,7 +87,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown());
 
   // Run one pass immediately rather than waiting for the first tick.
-  await drainQueue({ max: 20, budgetMs: 25_000 });
+  await drainQueue({ max: 20, budgetMs: QUEUE_INTERVAL_MS - 5_000 });
   void db;
 }
 

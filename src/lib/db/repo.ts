@@ -1,4 +1,5 @@
 import { newId, nowIso } from '../ids';
+import { queueStamp } from '../jobs/clock';
 import { isStalled } from '../jobs/job-failure';
 import type { AiUsageRecord, AnalyticsSnapshot, AuditLogEntry, AutomationError, AutomationRun, BrandProfile, Campaign, ContentItem, ContentPillar, ContentStatus, CreativeAsset, Job, JobType, MarketingStrategy, Notification, Persona, Platform, ProductAnalysis, Project, PublishedPost, Recommendation, Repository, ScheduledPost, Settings, SocialAccount, TrendSignal, User, Uuid, WeeklyReport } from '../types';
 import { getStore, type Store, type TenantScope } from './index';
@@ -20,13 +21,27 @@ export async function listCreativeFor(scope: TenantScope, projectId: Uuid, conte
 export async function listSocialAccounts(scope: TenantScope, projectId: Uuid): Promise<SocialAccount[]> { return db().find(scope, 'social_accounts', { where: { project_id: projectId } }); }
 export async function getSocialAccount(scope: TenantScope, projectId: Uuid, platform: Platform): Promise<SocialAccount | null> { return db().findOne(scope, 'social_accounts', { where: { project_id: projectId, platform } }); }
 export async function listScheduled(scope: TenantScope, projectId: Uuid, opts: { from?: string; to?: string; status?: ContentStatus[] } = {}): Promise<ScheduledPost[]> { return db().find(scope, 'scheduled_posts', { where: { project_id: projectId }, whereIn: opts.status ? { status: opts.status } : undefined, gte: opts.from ? { scheduled_for: opts.from } : undefined, lt: opts.to ? { scheduled_for: opts.to } : undefined, orderBy: 'scheduled_for', direction: 'asc' }); }
-export async function dueScheduledPosts(scope: TenantScope, now: string, limit = 50): Promise<ScheduledPost[]> { return db().find(scope, 'scheduled_posts', { whereIn: { status: ['scheduled', 'failed'] }, lt: { scheduled_for: now }, orderBy: 'scheduled_for', direction: 'asc', limit }); }
+/**
+ * Posts whose slot has arrived.
+ *
+ * Only `scheduled` ones. A retryable failure puts a post back to `scheduled`
+ * with a backoff, so it returns here on its own; a post left `failed` is
+ * waiting on a person — a dead connection, or attempts exhausted — and
+ * sweeping those back in ignored `max_attempts` and re-published them
+ * indefinitely. They come back through `resumeAfterReconnect` or an explicit
+ * retry, both of which set the status deliberately.
+ */
+export async function dueScheduledPosts(scope: TenantScope, now: string, limit = 50): Promise<ScheduledPost[]> { return db().find(scope, 'scheduled_posts', { whereIn: { status: ['scheduled'] }, lt: { scheduled_for: now }, orderBy: 'scheduled_for', direction: 'asc', limit }); }
 export async function listPublished(scope: TenantScope, projectId: Uuid, limit = 50): Promise<PublishedPost[]> { return db().find(scope, 'published_posts', { where: { project_id: projectId }, orderBy: 'published_at', direction: 'desc', limit }); }
 export async function listAnalytics(scope: TenantScope, projectId: Uuid, opts: { since?: string; scopeKind?: 'post' | 'account' } = {}): Promise<AnalyticsSnapshot[]> { return db().find(scope, 'analytics', { where: { project_id: projectId, ...(opts.scopeKind ? { scope: opts.scopeKind } : {}) }, gte: opts.since ? { collected_at: opts.since } : undefined, orderBy: 'collected_at', direction: 'desc' }); }
 
 export async function enqueue(scope: TenantScope, type: JobType, payload: Record<string, unknown>, opts: { projectId?: Uuid | null; runAfter?: string; maxAttempts?: number } = {}): Promise<Job> {
+  // created_at is the queue's ordering key, not decoration: a worker pass uses
+  // it to tell the jobs it may claim from the ones it just created. run_after
+  // stays on the wall clock — it decides when a job is due, and a job must not
+  // be a millisecond in the future the instant it is written.
   const ts = nowIso();
-  return db().insert(scope, 'jobs', { id: newId(), project_id: opts.projectId ?? null, type, payload, status: 'queued', attempts: 0, max_attempts: opts.maxAttempts ?? 5, run_after: opts.runAfter ?? ts, locked_at: null, last_error: null, result: null, created_at: ts, updated_at: ts });
+  return db().insert(scope, 'jobs', { id: newId(), project_id: opts.projectId ?? null, type, payload, status: 'queued', attempts: 0, max_attempts: opts.maxAttempts ?? 5, run_after: opts.runAfter ?? ts, locked_at: null, last_error: null, result: null, created_at: queueStamp(), updated_at: ts });
 }
 const enqueueLocks = new Map<string, Promise<unknown>>();
 export async function enqueueOnce(scope: TenantScope, type: JobType, payload: Record<string, unknown>, opts: { projectId?: Uuid | null; runAfter?: string; maxAttempts?: number; dedupeKey?: string } = {}): Promise<{ job: Job; created: boolean }> {

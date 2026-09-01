@@ -9,9 +9,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createProject, fakeGitHubClient, setupContext, teardown, type TestContext } from './helpers';
 import { analyzeProduct } from '@/lib/analysis/analyze';
+import { CONTENT_BATCH_SIZE } from '@/lib/content/generate';
 import { buildStrategy } from '@/lib/strategy/build';
 import { getProvider, setProvider } from '@/lib/ai/client';
-import { db, enqueueOnce, getAnalysis, getStrategy } from '@/lib/db/repo';
+import { db, enqueue, enqueueOnce, getAnalysis, getStrategy } from '@/lib/db/repo';
 import { runJob } from '@/lib/jobs/runner';
 import { pipelineState } from '@/lib/pipeline/state';
 import type { AiProvider, CompletionRequest } from '@/lib/ai/types';
@@ -197,6 +198,68 @@ describe('durable, resumable pipeline', () => {
     expect(
       (await db().find(ctx.scope, 'content_items', { where: { project_id: project.id } })).length,
     ).toBe(contentCount);
+  });
+
+  /** Runs a job with exactly this payload, rather than reusing a queued one. */
+  async function runFresh(type: JobType, payload: Record<string, unknown>) {
+    const job = await enqueue(ctx.scope, type, { projectId: project.id, ...payload }, {
+      projectId: project.id,
+    });
+    return runJob({ ...job, attempts: 1 });
+  }
+
+  it('writes the calendar in batches, one durable job at a time', async () => {
+    await throughPlan();
+
+    // The brand job leaves the first content batch queued. Run it, and it must
+    // leave the next batch queued rather than writing the whole calendar here.
+    const first = await run('generate_content', { days: 30 });
+    expect(first.status).toBe('succeeded');
+
+    const written = await db().find(ctx.scope, 'content_items', {
+      where: { project_id: project.id },
+    });
+    expect(written.length).toBeGreaterThan(0);
+    expect(written.length).toBeLessThanOrEqual(CONTENT_BATCH_SIZE);
+
+    const queued = await db().find(ctx.scope, 'jobs', {
+      where: { project_id: project.id, type: 'generate_content', status: 'queued' },
+    });
+    expect(queued).toHaveLength(1);
+    expect(queued[0].payload.batch).toBe(1);
+
+    // The next batch writes into the slots still open — it does not rewrite the
+    // posts already saved, and it does not double up on their days.
+    const before = written.map((i) => i.id).sort();
+    await runJob({ ...(queued[0] as Job), attempts: 1 });
+    const after = await db().find(ctx.scope, 'content_items', {
+      where: { project_id: project.id },
+    });
+    for (const id of before) expect(after.map((i) => i.id)).toContain(id);
+    expect(after.length).toBeGreaterThan(written.length);
+
+    const hours = after.map((i) => i.scheduled_for);
+    expect(new Set(hours).size).toBe(hours.length);
+  });
+
+  it('stops chaining batches once the window is written', async () => {
+    await throughPlan();
+    // Clear the 30-day batch the brand stage queued, so what remains is only
+    // what this job decides to leave behind.
+    for (const j of await db().find(ctx.scope, 'jobs', {
+      where: { project_id: project.id, type: 'generate_content' },
+    })) {
+      await db().remove(ctx.scope, 'jobs', j.id);
+    }
+
+    // A one-week window is small enough that a single batch fills it, so the
+    // chain must end rather than queue a batch with nothing left to write.
+    await runFresh('generate_content', { days: 7 });
+
+    const queued = await db().find(ctx.scope, 'jobs', {
+      where: { project_id: project.id, type: 'generate_content', status: 'queued' },
+    });
+    expect(queued).toHaveLength(0);
   });
 
   it('Test 7 — simultaneous requests do not duplicate a stage', async () => {

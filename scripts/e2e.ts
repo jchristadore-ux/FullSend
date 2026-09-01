@@ -21,7 +21,7 @@ import './script-env';
 import { setStore, MemoryStore, systemScope, userScope } from '../src/lib/db';
 import { db } from '../src/lib/db/repo';
 import { newId, nowIso } from '../src/lib/ids';
-import { useMockAdapters } from '../src/lib/social/registry';
+import { installMockAdapters } from '../src/lib/social/registry';
 import { completeConnection } from '../src/lib/social/connections';
 import { analyzeRepository } from '../src/lib/analysis/analyze';
 import { approveStrategy, buildStrategy, ensureBrandProfile } from '../src/lib/strategy/build';
@@ -34,6 +34,7 @@ import { optimize } from '../src/lib/optimizer/optimize';
 import { scanTrends } from '../src/lib/trends/scan';
 import { topUpContent, runDailyAutopilot } from '../src/lib/automation/autopilot';
 import { generateWeeklyReport } from '../src/lib/automation/weekly-report';
+import { drainQueue } from '../src/lib/jobs/runner';
 import { seedFullSendProject } from '../src/lib/seed/fullsend-project';
 import { GitHubClient } from '../src/lib/github/client';
 import type { Platform } from '../src/lib/types';
@@ -171,7 +172,7 @@ async function main() {
 ${X}`);
 
   setStore(new MemoryStore());
-  const adapters = useMockAdapters();
+  const adapters = installMockAdapters();
   const sys = systemScope('e2e');
 
   /* Account. */
@@ -527,9 +528,33 @@ ${X}`);
       break;
     }
   }
-  const stillQueued = target ? [target] : [];
-  if (stillQueued[0]) {
-    const outcome = await publishScheduledPost(scope, stillQueued[0].id);
+  /*
+   * By this point the calendar's image posts have all gone out, so there was
+   * often nothing left to fail and this stage quietly skipped — the connection
+   * failure it exists to prove went untested in CI. If nothing is queued, one
+   * approved image post is scheduled so the stage always runs.
+   */
+  if (!target) {
+    const spare = (
+      await db().find(scope, 'content_items', { where: { project_id: project.id } })
+    ).find(
+      (c) =>
+        !['reel', 'short_video', 'story'].includes(c.format) &&
+        c.status !== 'published' &&
+        c.creative_asset_ids.length > 0,
+    );
+    if (spare) {
+      const approved = await db().update(scope, 'content_items', spare.id, {
+        status: 'approved',
+        scheduled_for: new Date(Date.now() + 3600_000).toISOString(),
+      });
+      target = (await scheduleContent(scope, project, [approved])).scheduled[0] ?? null;
+    }
+  }
+
+  check(Boolean(target), 'A queued Instagram post to fail', target ? 'ready' : 'none available');
+  if (target) {
+    const outcome = await publishScheduledPost(scope, target.id);
     check(outcome.status === 'failed', 'Publish failed cleanly', outcome.error ?? '');
     check(Boolean(outcome.remedy), 'Actionable remedy given', outcome.remedy ?? '');
 
@@ -544,8 +569,33 @@ ${X}`);
     const { resumeAfterReconnect } = await import('../src/lib/publish/publish');
     const resumed = await resumeAfterReconnect(scope, project.id, 'instagram');
     check(resumed > 0, 'Resumes automatically after reconnect', `${resumed} posts released`);
-  } else {
-    ok('No queued Instagram post to fail', 'skipped');
+
+    // And the post that was held goes out through the queue, one job for it,
+    // with the browser nowhere in sight.
+    const { enqueueDuePublishJobs: sweep } = await import('../src/lib/automation/autopilot');
+    await db().update(scope, 'scheduled_posts', target.id, {
+      scheduled_for: new Date(Date.now() - 1000).toISOString(),
+    });
+    const queued = await sweep();
+    check(queued.queued === 1, 'Held post re-queued as a durable job', `${queued.queued} job`);
+    const drained = await drainQueue({ max: 10 });
+    check(drained.processed === 1, 'Worker published it', `${drained.processed} job processed`);
+    const receipt = await db().findOne(scope, 'published_posts', {
+      where: { scheduled_post_id: target.id },
+    });
+    check(Boolean(receipt), 'Receipt persisted', receipt?.external_id ?? 'none');
+
+    // A second sweep must not send it again.
+    const again = await sweep();
+    await drainQueue({ max: 10 });
+    const receipts = await db().find(scope, 'published_posts', {
+      where: { scheduled_post_id: target.id },
+    });
+    check(
+      again.queued === 0 && receipts.length === 1,
+      'Never published twice',
+      `${receipts.length} receipt`,
+    );
   }
 
   /* 17. Tenant isolation. */

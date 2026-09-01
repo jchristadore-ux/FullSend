@@ -26,7 +26,6 @@ export function getStore(): Store {
   let instance: Store;
   if (env.dbDriver === 'supabase') {
     // Required lazily so the memory driver never pulls in the Supabase client.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { SupabaseStore } = require('./supabase-store') as typeof import('./supabase-store');
     instance = new SupabaseStore();
   } else {

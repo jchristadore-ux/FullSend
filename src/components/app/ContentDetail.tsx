@@ -87,11 +87,16 @@ export function ContentDetail({
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.remedy ?? json.message ?? 'Could not approve');
+      /*
+       * "Send it now" queues the publish rather than performing it inside the
+       * request — publishing waits on Instagram, which can outlast a browser
+       * tab. So the honest answer here is that it is queued; the status on this
+       * page comes from the database and turns to Published when it actually
+       * has, whether or not this window is still open.
+       */
       setNote(
-        json.published
-          ? json.published.status === 'published'
-            ? 'Published.'
-            : `Not published: ${json.published.error ?? 'held'}`
+        json.publishJobId
+          ? 'Queued to publish. This page updates when it goes out — you can close it.'
           : 'Approved and scheduled.',
       );
       router.refresh();

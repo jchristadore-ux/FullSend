@@ -59,8 +59,17 @@ export const INSTAGRAM_SCOPES_INSTAGRAM_LOGIN = [
   'instagram_business_manage_insights',
 ];
 
-const CONTAINER_POLL_ATTEMPTS = 30;
-const CONTAINER_POLL_INTERVAL_MS = 4000;
+/*
+ * Meta transcodes asynchronously, and a Reel can take minutes. Waiting it out
+ * inside one invocation is what produced a request long enough to be killed —
+ * so the wait is bounded here and the *job* resumes the same container on the
+ * next pass. Eight attempts is about 25 seconds: long enough that an image
+ * finishes in the first attempt, short enough to leave the invocation intact.
+ */
+const CONTAINER_POLL_ATTEMPTS = 8;
+const CONTAINER_POLL_INTERVAL_MS = 3000;
+/** How far back to look for a post whose publish response was lost. */
+const RECOVERY_LOOKUP_LIMIT = 25;
 
 export class InstagramAdapter implements PlatformAdapter {
   readonly platform = 'instagram' as const;
@@ -291,14 +300,25 @@ export class InstagramAdapter implements PlatformAdapter {
     const token = this.publishToken(tokens, account);
     const igId = account.externalId;
 
-    let creationId: string;
-    if (input.format === 'carousel') {
-      creationId = await this.createCarousel(igId, token, input);
-    } else {
-      creationId = await this.createSingleContainer(igId, token, input);
+    /*
+     * A retry resumes the container the previous attempt built rather than
+     * uploading the media again. Two containers for one post is how the same
+     * content ends up on the account twice.
+     */
+    let creationId = input.resumeContainerId ?? null;
+    if (!creationId) {
+      creationId =
+        input.format === 'carousel'
+          ? await this.createCarousel(igId, token, input)
+          : await this.createSingleContainer(igId, token, input);
+      await input.onContainer?.(creationId);
     }
 
     await this.waitForContainer(creationId, token);
+
+    // Recorded before the call, not after: if the response never comes back,
+    // this is the only evidence that a publish was ever attempted.
+    await input.onSubmit?.(creationId);
 
     const published = await this.json<any>(this.graph(`/${igId}/media_publish`), {
       method: 'POST',
@@ -311,6 +331,68 @@ export class InstagramAdapter implements PlatformAdapter {
 
     log.info('published to instagram', { mediaId, format: input.format });
     return { externalId: mediaId, permalink, raw: published };
+  }
+
+  /**
+   * Did the container we submitted actually go live?
+   *
+   * Meta answers this directly: a container that has been published reports
+   * `status_code=PUBLISHED`. The media id is not derivable from the container
+   * id, so the post itself is found in the account's recent media by its
+   * caption. Anything short of a definite answer throws rather than returning
+   * null — "I don't know" must never be read as "it did not publish".
+   */
+  async findPublished(
+    tokens: TokenSet,
+    account: AccountInfo,
+    attempt: { containerId: string; caption: string },
+  ): Promise<PublishResult | null> {
+    const token = this.publishToken(tokens, account);
+    const status = await this.json<any>(
+      this.graph(`/${attempt.containerId}`) +
+        '?' +
+        new URLSearchParams({ fields: 'status_code,status', access_token: token }),
+    );
+
+    if (status.status_code !== 'PUBLISHED') return null;
+
+    const recent = await this.json<any>(
+      this.graph(`/${account.externalId}/media`) +
+        '?' +
+        new URLSearchParams({
+          fields: 'id,caption,permalink,timestamp',
+          limit: String(RECOVERY_LOOKUP_LIMIT),
+          access_token: token,
+        }),
+    );
+
+    const wanted = normalizeCaption(attempt.caption);
+    const match = (recent.data ?? []).find(
+      (m: any) => normalizeCaption(String(m.caption ?? '')) === wanted,
+    );
+
+    if (!match) {
+      // The container says published but the media is not in the recent list.
+      // Refusing to guess is the point: throwing keeps the post held for
+      // another attempt instead of publishing it a second time.
+      throw new FullSendError(
+        'publish_unverified',
+        'Instagram reports this post as published but it could not be matched to a media id',
+        {
+          retryable: true,
+          remedy:
+            'FullSend will check again shortly rather than risk publishing it twice. If it stays ' +
+            'unresolved, the post is on your profile — mark it published from the calendar.',
+          meta: { containerId: attempt.containerId },
+        },
+      );
+    }
+
+    return {
+      externalId: String(match.id),
+      permalink: match.permalink ?? null,
+      raw: { recovered: true, container_id: attempt.containerId, timestamp: match.timestamp },
+    };
   }
 
   private async createSingleContainer(
@@ -404,25 +486,40 @@ export class InstagramAdapter implements PlatformAdapter {
       );
       const code = status.status_code;
       if (code === 'FINISHED') return;
+      // Already live: a previous attempt published it and lost the response.
+      // The caller's recovery path owns this case, so stop rather than publish.
+      if (code === 'PUBLISHED') {
+        throw new FullSendError('publish_already_submitted', 'This container is already published', {
+          retryable: true,
+          remedy: 'FullSend will match it to the live post rather than publish it again.',
+          meta: { containerId, alreadyPublished: true },
+        });
+      }
       if (code === 'ERROR') {
         throw new FullSendError('publish_failed', `Instagram rejected the media: ${status.status}`, {
           remedy:
             'Usually a media format problem. Check the video is MP4/H.264 and within the ' +
             'Reels limits, then FullSend will retry.',
-          meta: { containerId, status: status.status },
+          meta: { containerId, status: status.status, containerUnusable: true },
         });
       }
       if (code === 'EXPIRED') {
         throw new FullSendError('publish_failed', 'The media container expired before publishing', {
           retryable: true,
           remedy: 'FullSend will rebuild the container and retry.',
+          // An expired container cannot be resumed; the retry starts a new one.
+          meta: { containerId, containerUnusable: true },
         });
       }
       await sleep(CONTAINER_POLL_INTERVAL_MS);
     }
-    throw new FullSendError('publish_timeout', 'Instagram is still processing the media', {
+    // Not a failure: Meta is still transcoding. The container id is already
+    // saved, so the next worker pass picks up this same container rather than
+    // uploading the media again.
+    throw new FullSendError('publish_pending', 'Instagram is still processing the media', {
       retryable: true,
       remedy: 'FullSend will check again shortly.',
+      meta: { containerId, stillProcessing: true },
     });
   }
 
@@ -637,6 +734,11 @@ export function mapMetaError(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Captions come back from Meta with whitespace normalised; compare like for like. */
+function normalizeCaption(caption: string): string {
+  return caption.replace(/\s+/g, ' ').trim();
 }
 
 export function instagramFormatSupported(format: ContentFormat): boolean {

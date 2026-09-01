@@ -26,6 +26,13 @@ interface State {
   stages: Stage[];
   currentStage: string | null;
   failedStage: string | null;
+  publishing: {
+    published: number;
+    inFlight: number;
+    failed: number;
+    scheduled: number;
+    nextSendAt: string | null;
+  };
 }
 
 const MARK: Record<Stage['status'], string> = {
@@ -150,6 +157,32 @@ export function PipelineCard({ projectId }: { projectId: string }) {
           </li>
         ))}
       </ul>
+
+      {/*
+        Publishing, from the rows themselves.
+
+        Every number here is a count of persisted state — receipts written,
+        posts a worker is holding, posts waiting on a person. Nothing on this
+        line comes from "the request returned successfully", which is why
+        refreshing the page cannot change it and closing the browser cannot
+        stop it.
+      */}
+      {(state.publishing.published > 0 ||
+        state.publishing.inFlight > 0 ||
+        state.publishing.failed > 0 ||
+        state.publishing.scheduled > 0) && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-edge px-4 py-3 font-mono text-[10px] uppercase tracking-widest">
+          <span className="text-dimmer">Publishing</span>
+          <span className="text-live">✓ {state.publishing.published} published</span>
+          {state.publishing.inFlight > 0 && (
+            <span className="text-send">⟳ {state.publishing.inFlight} going out</span>
+          )}
+          <span className="text-dimmer">○ {state.publishing.scheduled} scheduled</span>
+          {state.publishing.failed > 0 && (
+            <span className="text-warn">✕ {state.publishing.failed} need you</span>
+          )}
+        </div>
+      )}
 
       {error && <p className="border-t border-edge px-4 py-3 text-xs text-warn">{error}</p>}
     </section>

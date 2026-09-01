@@ -90,9 +90,14 @@ jobs:
           # GitHub does not honour '*/5' on a repository this quiet. The run
           # history says these fire roughly hourly, which is the difference
           # between a machine that keeps working after the browser closes and
-          # one that moves a single job an hour. The schedule is not ours to
-          # fix, so each run covers the gap itself: keep draining for five
-          # minutes rather than draining once and exiting.
+          # one that moves a single stage an hour. The schedule is not ours to
+          # fix, so each run covers the gap itself: keep calling for five
+          # minutes rather than calling once and exiting.
+          #
+          # Each call is a bounded worker pass — at most one AI generation or
+          # one publish, then it returns — so this loop advances a pipeline by
+          # ten steps per run without any single request growing long enough to
+          # be killed.
           if echo "$JOBS" | grep -q queue; then
             for _ in 1 2 3 4 5 6 7 8 9; do
               sleep 30

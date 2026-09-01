@@ -85,6 +85,8 @@ export interface Repository {
   topics: string[];
   stars: number;
   is_private: boolean;
+  /** Head commit of the default branch at the last ingest. */
+  commit_sha: string | null;
   last_indexed_at: IsoDate | null;
   created_at: IsoDate;
 }
@@ -103,6 +105,14 @@ export interface ProductAnalysis {
   id: Uuid;
   project_id: Uuid;
   repository_id: Uuid;
+  /**
+   * The commit this understanding was derived from.
+   *
+   * The identity of an analysis: the same commit is never analysed twice, and
+   * a different one produces a new version rather than replacing this row.
+   * Null on analyses saved before the column existed.
+   */
+  commit_sha: string | null;
   /** One-sentence answer to "what is this?". */
   one_liner: string;
   what_it_does: string;
@@ -403,6 +413,24 @@ export interface ScheduledPost {
   last_error: string | null;
   next_attempt_at: IsoDate | null;
   created_at: IsoDate;
+
+  /*
+   * The publish attempt, as durable state.
+   *
+   * Instagram publishes in two calls: a container is created, then published.
+   * If the second call's *response* is lost — a timeout, a dead worker, a
+   * killed function — the post may well be live on Instagram with nothing
+   * here to say so. A blind retry then publishes it twice.
+   *
+   * `platform_container_id` is written before the publish call, and
+   * `publish_submitted_at` the instant before it goes out. Between them they
+   * turn "did this already publish?" from a guess into a question the adapter
+   * can ask Instagram, which is what makes the retry safe.
+   */
+  started_at: IsoDate | null;
+  platform_container_id: string | null;
+  publish_submitted_at: IsoDate | null;
+  published_at: IsoDate | null;
 }
 
 export interface PublishedPost {

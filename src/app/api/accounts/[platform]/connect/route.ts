@@ -45,6 +45,25 @@ export async function GET(
       });
     }
 
+    /*
+     * A deployed FullSend that thinks it lives on localhost would hand Meta a
+     * callback pointing at the founder's laptop. Meta either rejects it or,
+     * worse, sends the authorization code somewhere that cannot receive it —
+     * so this stops at the door with the variable that is missing.
+     */
+    if (env.appUrlIsLocal && env.nodeEnv === 'production') {
+      throw new FullSendError(
+        'app_url_not_set',
+        'FullSend does not know its own public address',
+        {
+          status: 500,
+          remedy:
+            'Set NEXT_PUBLIC_APP_URL to the deployment’s https:// URL and redeploy. Every OAuth ' +
+            'callback is built from it, and it must match the redirect URI registered with Meta.',
+        },
+      );
+    }
+
     const redirectUri = `${env.appUrl}/api/accounts/${platform}/callback`;
     const state = signState({ projectId, userId: session.user.id, platform });
     const { url, codeVerifier } = adapter.authorizeUrl(state, redirectUri);

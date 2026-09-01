@@ -5,11 +5,18 @@ import { logger } from '@/lib/logger';
 import { systemScope } from '@/lib/db';
 import { db, enqueue } from '@/lib/db/repo';
 import { cronSecretValid, drainQueue } from '@/lib/jobs/runner';
-import { projectsForAutopilot, publishDuePosts } from '@/lib/automation/autopilot';
+import { enqueueDuePublishJobs, projectsForAutopilot } from '@/lib/automation/autopilot';
 import { sweep } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
+
+/**
+ * Well inside `maxDuration`, with room for a job that started just under the
+ * line to finish and write its result. A worker pass that gets killed leaves a
+ * job locked until its lease expires; leaving margin is cheaper than recovery.
+ */
+const DRAIN_BUDGET_MS = 200_000;
 
 const log = logger('cron');
 
@@ -70,12 +77,21 @@ async function handle(
 async function runCronJob(job: string): Promise<Record<string, unknown>> {
   const scope = systemScope(`cron:${job}`);
 
+  /*
+   * Every branch here is the same shape: write durable jobs, then run one
+   * bounded worker pass. Nothing publishes or calls an AI provider inline, so
+   * no request can outlive its own invocation — `drainQueue` stops at the
+   * first expensive job and the next heartbeat picks up where it left off.
+   */
   switch (job) {
     case 'queue':
-      return drainQueue({ max: 25, budgetMs: 240_000 });
+      return { ...(await drainQueue({ max: 25, budgetMs: DRAIN_BUDGET_MS })) };
 
-    case 'publish':
-      return publishDuePosts(40);
+    case 'publish': {
+      const queued = await enqueueDuePublishJobs(50);
+      const drained = await drainQueue({ max: 5, budgetMs: DRAIN_BUDGET_MS });
+      return { ...queued, ...drained };
+    }
 
     case 'daily': {
       const projects = await projectsForAutopilot();
@@ -83,7 +99,7 @@ async function runCronJob(job: string): Promise<Record<string, unknown>> {
       for (const p of projects) {
         await enqueue(scope, 'daily_autopilot', { projectId: p.id }, { projectId: p.id });
       }
-      const drained = await drainQueue({ max: 12, budgetMs: 240_000 });
+      const drained = await drainQueue({ max: 12, budgetMs: DRAIN_BUDGET_MS });
       return { projects: projects.length, ...drained };
     }
 
@@ -92,7 +108,7 @@ async function runCronJob(job: string): Promise<Record<string, unknown>> {
       for (const p of projects) {
         await enqueue(scope, 'weekly_report', { projectId: p.id }, { projectId: p.id });
       }
-      const drained = await drainQueue({ max: 12, budgetMs: 240_000 });
+      const drained = await drainQueue({ max: 12, budgetMs: DRAIN_BUDGET_MS });
       return { projects: projects.length, ...drained };
     }
 

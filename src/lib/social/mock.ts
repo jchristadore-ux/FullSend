@@ -30,6 +30,7 @@ export interface MockPost {
   publishedAt: number;
   input: PublishInput;
   metrics: PostMetrics;
+  containerId: string;
 }
 
 export class MockAdapter implements PlatformAdapter {
@@ -41,6 +42,12 @@ export class MockAdapter implements PlatformAdapter {
   quotaUsed = 0;
   quotaLimit = 100;
   tokenExpired = false;
+  /**
+   * Models the failure mode that matters most: the post goes live, and the
+   * response never makes it back. Everything downstream must behave as if the
+   * publish succeeded, because on the platform it did.
+   */
+  losePublishResponse = false;
 
   constructor(
     readonly platform: Platform,
@@ -119,11 +126,6 @@ export class MockAdapter implements PlatformAdapter {
         meta: { platform: this.platform, needsAttention: true },
       });
     }
-    if (this.failNextPublish) {
-      const err = this.failNextPublish;
-      this.failNextPublish = null;
-      throw err;
-    }
     if (this.quotaUsed >= this.quotaLimit) {
       throw new FullSendError('quota_exhausted', `${platformLabel(this.platform)} daily limit reached`, {
         status: 429,
@@ -135,6 +137,19 @@ export class MockAdapter implements PlatformAdapter {
       throw new FullSendError('media_missing', 'No media supplied', { status: 400 });
     }
 
+    // The container exists before the publish call, as it does on Instagram —
+    // so a publish that fails leaves one behind for the retry to reuse.
+    const containerId = input.resumeContainerId ?? `mock-container-${newId()}`;
+    if (!input.resumeContainerId) await input.onContainer?.(containerId);
+
+    if (this.failNextPublish) {
+      const err = this.failNextPublish;
+      this.failNextPublish = null;
+      throw err;
+    }
+
+    await input.onSubmit?.(containerId);
+
     this.quotaUsed++;
     const externalId = `mock-post-${newId()}`;
     this.posts.set(externalId, {
@@ -142,12 +157,38 @@ export class MockAdapter implements PlatformAdapter {
       publishedAt: Date.now(),
       input,
       metrics: emptyMetrics(),
+      containerId,
     });
+
+    if (this.losePublishResponse) {
+      // Published on the platform; the caller never hears about it.
+      this.losePublishResponse = false;
+      throw new FullSendError('platform_error', 'The connection dropped before the reply arrived', {
+        retryable: true,
+      });
+    }
+
     return {
       externalId,
       permalink: `https://mock.local/${this.platform}/${externalId}`,
       raw: { ok: true, id: externalId, platform: this.platform },
     };
+  }
+
+  async findPublished(
+    _tokens: TokenSet,
+    _account: AccountInfo,
+    attempt: { containerId: string; caption: string },
+  ): Promise<PublishResult | null> {
+    for (const post of this.posts.values()) {
+      if (post.containerId !== attempt.containerId) continue;
+      return {
+        externalId: post.externalId,
+        permalink: `https://mock.local/${this.platform}/${post.externalId}`,
+        raw: { recovered: true, container_id: attempt.containerId },
+      };
+    }
+    return null;
   }
 
   async getPostMetrics(
@@ -185,5 +226,6 @@ export class MockAdapter implements PlatformAdapter {
     this.quotaUsed = 0;
     this.failNextPublish = null;
     this.tokenExpired = false;
+    this.losePublishResponse = false;
   }
 }

@@ -71,6 +71,8 @@ const SELF_ANALYSIS: Omit<
   ProductAnalysis,
   'id' | 'project_id' | 'repository_id' | 'created_at'
 > = {
+  // Written by hand rather than derived from a commit, so it is keyed to none.
+  commit_sha: null,
   one_liner: 'Give FullSend your app’s repo and it builds and runs the whole marketing machine.',
   what_it_does:
     'FullSend reads a GitHub repository, works out what the product actually does and who ' +
@@ -282,6 +284,7 @@ async function upsertSelfRepository(scope: TenantScope, projectId: Uuid): Promis
     name: 'fullsend',
     url: 'https://github.com/fullsend/fullsend',
     default_branch: 'main',
+    commit_sha: null,
     description: 'FullSend. Everything goes live.',
     primary_language: 'TypeScript',
     languages: { TypeScript: 100_000 },

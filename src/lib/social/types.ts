@@ -40,6 +40,17 @@ export interface PublishInput {
   disableComments?: boolean;
   disableDuet?: boolean;
   disableStitch?: boolean;
+
+  /**
+   * A container this post already has on the platform. Supplied on a retry so
+   * the adapter resumes the attempt already in flight instead of uploading the
+   * media again — one post, one container, however many attempts it takes.
+   */
+  resumeContainerId?: string | null;
+  /** Called the moment a container exists, before anything is published. */
+  onContainer?: (containerId: string) => Promise<void>;
+  /** Called immediately before the publish call goes out. */
+  onSubmit?: (containerId: string) => Promise<void>;
 }
 
 export interface PublishResult {
@@ -84,6 +95,19 @@ export interface PlatformAdapter {
   refresh(tokens: TokenSet): Promise<TokenSet>;
   getAccount(tokens: TokenSet): Promise<AccountInfo>;
   publish(tokens: TokenSet, account: AccountInfo, input: PublishInput): Promise<PublishResult>;
+  /**
+   * Asks the platform whether a submitted container already went live.
+   *
+   * The one question that makes a publish retry safe. Returns the real post
+   * when the platform has one, null when it genuinely does not, and throws if
+   * it cannot tell — an adapter must never answer "no" out of ignorance,
+   * because that answer publishes the post a second time.
+   */
+  findPublished?(
+    tokens: TokenSet,
+    account: AccountInfo,
+    attempt: { containerId: string; caption: string },
+  ): Promise<PublishResult | null>;
   getPostMetrics(
     tokens: TokenSet,
     account: AccountInfo,

@@ -2,8 +2,9 @@ import 'server-only';
 import { env } from '../env';
 import { systemScope } from '../db';
 import { db, enqueueOnce, getAnalysis, recordError } from '../db/repo';
-import { isFullSendError } from '../errors';
+import { FullSendError, isFullSendError } from '../errors';
 import { nowIso } from '../ids';
+import { queueStamp } from './clock';
 import { logger } from '../logger';
 import { systemAnalyzeProduct } from '../analysis/analyze';
 import { buildStrategy, ensureBrandProfile } from '../strategy/build';
@@ -19,6 +20,12 @@ import type { Job, JobType } from '../types';
 
 const log = logger('jobs');
 const LOCK_TIMEOUT_MS = 3 * 60 * 1000;
+/**
+ * A ceiling on how far one Generate can chain. Six posts a batch, so a
+ * calendar tops out around sixty — comfortably more than any window the
+ * product offers, and a hard stop if a slot ever fails to fill.
+ */
+const MAX_CONTENT_BATCHES = 10;
 type Handler = (job: Job) => Promise<Record<string, unknown>>;
 
 const handlers: Record<JobType, Handler> = {
@@ -45,20 +52,61 @@ const handlers: Record<JobType, Handler> = {
   generate_brand: async (job) => {
     const scope = systemScope('job:generate_brand'); const projectId = String(job.payload.projectId); const project = await db().get(scope, 'projects', projectId); if (!project) throw new Error(`Project ${projectId} not found`);
     const analysis = await getAnalysis(scope, projectId); if (!analysis) throw new Error('No product analysis to build a brand profile from'); const strategy = await db().findOne(scope, 'marketing_strategies', { where: { project_id: projectId }, orderBy: 'version', direction: 'desc' }); if (!strategy) throw new Error('No strategy to build a brand profile from');
-    const { brand, costUsd } = await ensureBrandProfile(scope, project, analysis, strategy, { refresh: Boolean(job.payload.refresh) }); const key = `${projectId}:content:0`; await enqueueOnce(scope, 'generate_content', { projectId, days: 30, origin: 'initial', idempotencyKey: key }, { projectId, dedupeKey: key });
+    const { brand, costUsd } = await ensureBrandProfile(scope, project, analysis, strategy, { refresh: Boolean(job.payload.refresh) }); const key = `${projectId}:content:30:0`; await enqueueOnce(scope, 'generate_content', { projectId, days: 30, origin: 'initial', batch: 0, idempotencyKey: key }, { projectId, dedupeKey: key });
     return { brandId: brand.id, costUsd, reused: costUsd === 0 };
   },
+  /*
+   * One batch of posts per job — never "write me thirty".
+   *
+   * Each batch persists the posts it wrote before this job returns, so a
+   * calendar half-built is a calendar half-saved. While slots remain, the job
+   * queues the next batch and stops; the worker picks that up on a later pass.
+   * A batch that writes nothing new ends the chain rather than looping.
+   */
   generate_content: async (job) => {
     const scope = systemScope('job:generate_content'); const projectId = String(job.payload.projectId); const project = await db().get(scope, 'projects', projectId); if (!project) throw new Error(`Project ${projectId} not found`);
-    const days = Number(job.payload.days ?? 30); const result = await topUpContent(scope, project, days, job.payload.brief ? String(job.payload.brief) : undefined, (job.payload.origin as never) ?? 'initial');
-    if (result.generated > 0) { await db().update(scope, 'projects', projectId, { status: 'content_ready', updated_at: nowIso() }); const key = `${projectId}:schedule`; await enqueueOnce(scope, 'schedule_content', { projectId, idempotencyKey: key }, { projectId, dedupeKey: key }); }
-    return { ...result };
+    const days = Number(job.payload.days ?? 30); const batchIndex = Number(job.payload.batch ?? 0);
+    const result = await topUpContent(scope, project, days, job.payload.brief ? String(job.payload.brief) : undefined, (job.payload.origin as never) ?? 'initial');
+    let nextBatchQueued = false;
+    if (result.generated > 0) {
+      await db().update(scope, 'projects', projectId, { status: 'content_ready', updated_at: nowIso() });
+      const key = `${projectId}:schedule`; await enqueueOnce(scope, 'schedule_content', { projectId, idempotencyKey: key }, { projectId, dedupeKey: key });
+      if (result.remainingSlots > 0 && batchIndex + 1 < MAX_CONTENT_BATCHES) {
+        const next = batchIndex + 1; const nextKey = `${projectId}:content:${days}:${next}`;
+        const { created } = await enqueueOnce(scope, 'generate_content', { projectId, days, origin: job.payload.origin ?? 'initial', brief: job.payload.brief ?? null, batch: next, idempotencyKey: nextKey }, { projectId, dedupeKey: nextKey });
+        nextBatchQueued = created;
+      }
+    }
+    return { ...result, batch: batchIndex, nextBatchQueued };
   },
   generate_creative: async (job) => { const scope = systemScope('job:generate_creative'); const item = await db().get(scope, 'content_items', String(job.payload.contentItemId)); if (!item) throw new Error('Content item not found'); return { contentId: item.id, assets: item.creative_asset_ids.length, note: 'Creative is materialized during content generation before scheduling.' }; },
   quality_control: async (job) => ({ projectId: String(job.payload.projectId), skipped: 'Quality control is executed as part of the content checkpoint.' }),
   schedule_content: async (job) => { const scope = systemScope('job:schedule_content'); const projectId = String(job.payload.projectId); const project = await db().get(scope, 'projects', projectId); if (!project) throw new Error(`Project ${projectId} not found`); const approved = await db().find(scope, 'content_items', { where: { project_id: projectId, status: 'approved' } }); const result = await scheduleContent(scope, project, approved); return { scheduled: result.scheduled.length, skipped: result.skipped.length }; },
-  publish_post: async (job) => { const outcome = await publishScheduledPost(systemScope('job:publish_post'), String(job.payload.scheduledPostId)); return { status: outcome.status, error: outcome.error ?? null }; },
-  collect_analytics: async (job) => ({ ...(await collectAnalytics(systemScope('job:collect_analytics'), String(job.payload.projectId))) }),
+  /*
+   * One post, one job. A post that is only retrying must not leave a
+   * *succeeded* job behind — that is how a post ends up waiting for a retry
+   * nothing will ever perform. Throwing hands the retry to the queue, which
+   * already knows how to back off and when to give up, and keeps the publish
+   * schedule in one place rather than two that can disagree.
+   */
+  publish_post: async (job) => {
+    const outcome = await publishScheduledPost(systemScope('job:publish_post'), String(job.payload.scheduledPostId));
+    if (outcome.status === 'retrying') {
+      throw new FullSendError('publish_retrying', outcome.error ?? 'The publish did not complete', { retryable: true, remedy: outcome.remedy ?? null, meta: { retryAfter: outcome.nextAttemptAt ?? null } });
+    }
+    return { status: outcome.status, error: outcome.error ?? null, remedy: outcome.remedy ?? null };
+  },
+  // One bounded pass of insights calls. Anything it did not reach is queued
+  // for the next pass rather than kept inside this one.
+  collect_analytics: async (job) => {
+    const scope = systemScope('job:collect_analytics'); const projectId = String(job.payload.projectId);
+    const result = await collectAnalytics(scope, projectId);
+    // Only while it is still getting somewhere. A pass that reads nothing has
+    // no reason to believe the next one would, and chaining on it would spend
+    // every worker pass on a queue that never shortens.
+    if (result.remaining > 0 && result.postsCollected > 0) { const key = `${projectId}:analytics:${result.remaining}`; await enqueueOnce(scope, 'collect_analytics', { projectId, idempotencyKey: key }, { projectId, dedupeKey: key }); }
+    return { ...result };
+  },
   optimize: async (job) => { const scope = systemScope('job:optimize'); const projectId = String(job.payload.projectId); const project = await db().get(scope, 'projects', projectId); if (!project) throw new Error(`Project ${projectId} not found`); const result = await optimize(scope, project); return { recommendations: result.recommendations.length, applied: result.applied.length, postsAnalyzed: result.postsAnalyzed }; },
   daily_autopilot: async (job) => {
     const scope = systemScope('job:daily_autopilot'); const projectId = String(job.payload.projectId); const project = await db().get(scope, 'projects', projectId); if (!project) throw new Error(`Project ${projectId} not found`);
@@ -81,30 +129,109 @@ export function backoffSeconds(attempt: number): number { return Math.min(3600, 
 export async function runJob(job: Job): Promise<{ status: 'succeeded' | 'failed' | 'dead' }> {
   const scope = systemScope('job runner'); const started = Date.now();
   try { const handler = handlers[job.type]; if (!handler) throw new Error(`No handler for job type ${job.type}`); const result = await handler(job); await db().update(scope, 'jobs', job.id, { status: 'succeeded', result, last_error: null, locked_at: null, updated_at: nowIso() }); log.info('job succeeded', { id: job.id, type: job.type, ms: Date.now() - started }); return { status: 'succeeded' }; }
-  catch (e) { const message = e instanceof Error ? e.message : String(e); const retryable = isFullSendError(e) ? e.retryable : true; const exhausted = job.attempts >= job.max_attempts || !retryable; if (exhausted) { await db().update(scope, 'jobs', job.id, { status: 'dead', last_error: message, locked_at: null, updated_at: nowIso() }); await recordError(scope, { projectId: job.project_id, scope: `job:${job.type}`, message, remedy: isFullSendError(e) ? e.remedy : null, fatal: true }); return { status: 'dead' }; } const runAfter = new Date(Date.now() + backoffSeconds(job.attempts) * 1000).toISOString(); await db().update(scope, 'jobs', job.id, { status: 'queued', last_error: message, run_after: runAfter, locked_at: null, updated_at: nowIso() }); await recordError(scope, { projectId: job.project_id, scope: `job:${job.type}`, message, remedy: isFullSendError(e) ? e.remedy : null, fatal: false }); return { status: 'failed' }; }
+  catch (e) { const message = e instanceof Error ? e.message : String(e); const retryable = isFullSendError(e) ? e.retryable : true; const exhausted = job.attempts >= job.max_attempts || !retryable; if (exhausted) { await db().update(scope, 'jobs', job.id, { status: 'dead', last_error: message, locked_at: null, updated_at: nowIso() }); await recordError(scope, { projectId: job.project_id, scope: `job:${job.type}`, message, remedy: isFullSendError(e) ? e.remedy : null, fatal: true }); return { status: 'dead' }; } // A failure that already knows when it may be tried again — a publish holding
+    // its own backoff, a platform naming a retry-after — decides its own slot;
+    // the queue's exponential backoff is the floor, never an override.
+    const ownBackoff = isFullSendError(e) ? String(e.meta?.retryAfter ?? '') : ''; const defaultRunAfter = Date.now() + backoffSeconds(job.attempts) * 1000; const parsedOwn = ownBackoff ? Date.parse(ownBackoff) : NaN; const runAfter = new Date(Number.isNaN(parsedOwn) ? defaultRunAfter : Math.max(parsedOwn, Date.now() + 1000)).toISOString(); await db().update(scope, 'jobs', job.id, { status: 'queued', last_error: message, run_after: runAfter, locked_at: null, updated_at: nowIso() }); await recordError(scope, { projectId: job.project_id, scope: `job:${job.type}`, message, remedy: isFullSendError(e) ? e.remedy : null, fatal: false }); return { status: 'failed' }; }
 }
 
-export async function drainQueue(opts: { max?: number; budgetMs?: number; projectId?: string | null } = {}): Promise<{ processed: number; succeeded: number; failed: number; dead: number }> {
-  // A cron/serverless invocation processes ONE durable job only. It never follows
-  // the chain into another AI call. The completed job persists its successor;
-  // the next heartbeat invocation handles that successor.
-  // A single invocation is intentionally limited to one durable job. `opts.max`
-  // remains accepted for API compatibility, but cannot turn this into a batch worker.
-  const max = 1;
-  const budgetMs = Math.min(opts.budgetMs ?? 50_000, 55_000);
+/**
+ * Jobs that call an AI provider or a publishing API — the ones whose duration
+ * belongs to somebody else's servers. A pass runs at most one of these, so no
+ * invocation can ever become "30 AI generations" or "30 publications".
+ */
+export const HEAVY_JOBS: ReadonlySet<JobType> = new Set<JobType>([
+  'analyze_repository',
+  'generate_strategy',
+  'generate_brand',
+  'generate_content',
+  'generate_creative',
+  'optimize',
+  'collect_analytics',
+  'scan_trends',
+  'weekly_report',
+  'publish_post',
+]);
+
+/** Budget a pass keeps in reserve before starting another job. */
+export const JOB_HEADROOM_MS = 5_000;
+
+export interface DrainResult {
+  processed: number;
+  succeeded: number;
+  failed: number;
+  dead: number;
+  /** Why the pass ended. Recorded, not guessed, so a caller can act on it. */
+  stopped: 'empty' | 'max' | 'budget' | 'heavy';
+}
+
+/**
+ * One bounded worker pass. Three independent bounds, each closing a different
+ * way an invocation used to become a long-running request:
+ *
+ *   • At most one *heavy* job — anything that calls an AI provider or publishes
+ *     to Instagram. A backlog of thirty generations takes thirty passes, never
+ *     one long one.
+ *
+ *   • At most `max` jobs, and never past the elapsed-time budget. Light
+ *     bookkeeping jobs drain quickly; the pass still ends well inside the
+ *     invocation it was given.
+ *
+ *   • Only jobs that already existed when the pass began. A completed job
+ *     enqueues its successor and that successor belongs to the *next* pass,
+ *     which is what stops one invocation walking
+ *     analyse → strategy → brand → content as a single chain of AI calls.
+ *
+ * So the queue genuinely drains, while no single invocation can grow without
+ * limit. Every one of those bounds is covered by a test.
+ */
+export async function drainQueue(
+  opts: { max?: number; budgetMs?: number; projectId?: string | null; maxHeavy?: number } = {},
+): Promise<DrainResult> {
+  const max = Math.max(1, Math.min(opts.max ?? 1, 50));
+  const maxHeavy = Math.max(1, opts.maxHeavy ?? 1);
+  // Taken as given: a pass with less budget than the reserve starts nothing,
+  // which is the correct answer for an invocation that is already nearly over.
+  const budgetMs = opts.budgetMs ?? 50_000;
+  const startedAt = queueStamp();
   const deadline = Date.now() + budgetMs;
-  const ROOM_TO_RUN_MS = 25_000;
-  let processed = 0, succeeded = 0, failed = 0, dead = 0;
-  while (processed < max && Date.now() + ROOM_TO_RUN_MS < deadline) {
-    const job = await db().claimNextJob(nowIso(), LOCK_TIMEOUT_MS, opts.projectId ?? null);
-    if (!job) break;
+
+  let processed = 0,
+    succeeded = 0,
+    failed = 0,
+    dead = 0,
+    heavy = 0;
+  let stopped: DrainResult['stopped'] = 'max';
+
+  while (processed < max) {
+    if (Date.now() + JOB_HEADROOM_MS > deadline) {
+      stopped = 'budget';
+      break;
+    }
+    const job = await db().claimNextJob(nowIso(), LOCK_TIMEOUT_MS, {
+      projectId: opts.projectId ?? null,
+      createdBefore: startedAt,
+    });
+    if (!job) {
+      stopped = 'empty';
+      break;
+    }
+
     const { status } = await runJob(job);
     processed++;
     if (status === 'succeeded') succeeded++;
     else if (status === 'dead') dead++;
     else failed++;
+
+    if (HEAVY_JOBS.has(job.type)) {
+      heavy++;
+      if (heavy >= maxHeavy) {
+        stopped = 'heavy';
+        break;
+      }
+    }
   }
-  return { processed, succeeded, failed, dead };
+  return { processed, succeeded, failed, dead, stopped };
 }
 
 export async function queueStats(): Promise<{ queued: number; running: number; succeeded: number; failed: number; dead: number; oldestQueuedAt: string | null }> {

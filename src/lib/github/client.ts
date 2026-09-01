@@ -159,6 +159,26 @@ export class GitHubClient {
     };
   }
 
+  /**
+   * The commit the default branch is on.
+   *
+   * This is the identity of an analysis: the same commit always describes the
+   * same product, so it never needs analysing twice, and a different commit is
+   * a genuinely different thing to understand. Returns null rather than
+   * throwing — a repository whose head cannot be read is still analysable, it
+   * just cannot be recognised as one already analysed.
+   */
+  async getHeadSha(ref: RepoRef, branch: string): Promise<string | null> {
+    try {
+      const r = await this.request<{ sha?: string }>(
+        `/repos/${ref.owner}/${ref.name}/commits/${encodeURIComponent(branch)}`,
+      );
+      return r.sha ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async getLanguages(ref: RepoRef): Promise<Record<string, number>> {
     try {
       return await this.request<Record<string, number>>(
