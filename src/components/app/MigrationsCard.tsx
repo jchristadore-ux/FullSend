@@ -37,8 +37,16 @@ export function MigrationsCard() {
     try {
       const res = await fetch('/api/admin/migrations', { cache: 'no-store' });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.remedy ?? json.message ?? 'Could not read the schema state');
+      if (!res.ok) {
+        // The status matters as much as the message: 403 is an account
+        // problem and everything else is not, and the two need different
+        // things done about them.
+        throw new Error(
+          `${res.status} — ${json.remedy ?? json.message ?? 'Could not read the schema state'}`,
+        );
+      }
       setReport(json);
+      setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -85,7 +93,44 @@ export function MigrationsCard() {
     }
   }
 
-  if (!report) return null;
+  /*
+   * Never render nothing.
+   *
+   * This used to be `if (!report) return null`, so any failure to read the
+   * schema state removed the entire panel from the Control Room — including
+   * the error explaining why. The report is the thing you open this page to
+   * find, and a missing panel reads as "this feature does not exist" rather
+   * than "this request failed", which is the worse of the two by far: one
+   * sends you to the logs, the other sends you looking for a menu item that
+   * was there all along.
+   */
+  if (!report) {
+    return (
+      <section className="panel mt-6 p-5">
+        <div className="flex items-baseline justify-between gap-4">
+          <span className="label">Database schema</span>
+          <span className="font-mono text-[10px] uppercase tracking-widest text-warn">
+            {error ? 'Unavailable' : 'Checking…'}
+          </span>
+        </div>
+        {error ? (
+          <>
+            <p className="mt-3 whitespace-pre-wrap break-words text-xs text-fail">{error}</p>
+            <p className="mt-3 font-mono text-[10px] leading-relaxed text-dimmer">
+              A 403 here means your account is not an admin — add your email to
+              FULLSEND_ADMIN_EMAILS and sign in again. Anything else is the schema check itself
+              failing; the migration files can always be run by hand in the Supabase SQL editor.
+            </p>
+            <button type="button" onClick={() => void load()} className="btn-quiet mt-4">
+              Try again
+            </button>
+          </>
+        ) : (
+          <p className="mt-3 text-xs text-dim">Reading the schema state…</p>
+        )}
+      </section>
+    );
+  }
 
   const pending = report.pending.length;
 

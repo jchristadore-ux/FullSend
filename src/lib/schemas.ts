@@ -149,13 +149,33 @@ export const strategySchema = z.object({
 });
 export type StrategyPayload = z.infer<typeof strategySchema>;
 
+/*
+ * Note what is absent: colours, typefaces and logo URLs.
+ *
+ * Those are read out of the product's own repository by `brand/discover.ts`,
+ * never asked of a model. A model given a repository summary will happily
+ * produce a plausible hex, and downstream nothing can tell that hex from one
+ * parsed out of a stylesheet — so the only safe design is for the model to be
+ * unable to supply one at all. It describes; the repository decides.
+ */
 export const brandProfileSchema = z.object({
+  brand_name: z.string().max(80).default(''),
   voice: z.string().max(600).default(''),
   tone_attributes: z.array(z.string()).max(10).default([]),
   audience: z.string().max(500).default(''),
   messaging_pillars: z.array(z.string()).max(8).default([]),
   terminology: z.record(z.string(), z.string()).default({}),
   visual_style: z.string().max(400).default(''),
+  design_language: z.string().max(400).default(''),
+  imagery_style: z.string().max(400).default(''),
+  graphic_style: z.string().max(400).default(''),
+  icon_style: z.string().max(200).default(''),
+  brand_personality: z.string().max(400).default(''),
+  brand_keywords: z.array(z.string()).max(20).default([]),
+  visual_dos: z.array(z.string()).max(10).default([]),
+  visual_donts: z.array(z.string()).max(10).default([]),
+  content_dos: z.array(z.string()).max(10).default([]),
+  content_donts: z.array(z.string()).max(10).default([]),
   words_to_use: z.array(z.string()).max(30).default([]),
   words_to_avoid: z.array(z.string()).max(40).default([]),
   positioning: z.string().max(600).default(''),
@@ -221,6 +241,65 @@ export const approveStrategyInput = z.object({
   positioning: z.string().max(600).optional(), value_proposition: z.string().max(400).optional(), campaign_strategy: z.string().max(1200).optional(), growth_strategy: z.string().max(1200).optional(),
   content_mix: contentMixSchema.optional(), posting_cadence: strategySchema.shape.posting_cadence.optional(),
 });
+/*
+ * Correcting a brand profile by hand.
+ *
+ * Every field is optional: a founder fixing one wrong colour sends one colour.
+ * The fields they send are the fields that get locked, so a later re-analysis
+ * cannot revert them — which is why this schema is deliberately narrow. It
+ * carries only what a person can sensibly judge by looking at their own
+ * product, and nothing derived (`identity_sources`, `locked_fields`,
+ * `updated_at`) is settable from outside.
+ */
+const hexColor = z
+  .string()
+  .trim()
+  .regex(/^#[0-9a-fA-F]{6}$/, 'Use a 6-digit hex colour like #1A73E8')
+  .or(z.literal(''));
+
+// A font stack, not a URL: the renderer typesets with it directly. Characters
+// that would break out of an SVG attribute are refused here rather than
+// stripped later, so what is stored is what a founder will see used.
+const fontStack = z
+  .string()
+  .trim()
+  .max(200)
+  .refine((s) => !/[<>"'`;{}]/.test(s), 'A font stack cannot contain < > " \' ` ; { or }');
+
+const assetUrl = z
+  .string()
+  .trim()
+  .max(500)
+  .refine((s) => s === '' || /^https:\/\//i.test(s), 'Must be an https:// URL')
+  .nullable();
+
+export const updateBrandInput = z.object({
+  brand_name: z.string().trim().max(80).optional(),
+  primary_color: hexColor.optional(),
+  secondary_color: hexColor.optional(),
+  accent_color: hexColor.optional(),
+  background_color: hexColor.optional(),
+  text_color: hexColor.optional(),
+  heading_font: fontStack.optional(),
+  body_font: fontStack.optional(),
+  logo_url: assetUrl.optional(),
+  logo_dark_url: assetUrl.optional(),
+  icon_style: z.string().trim().max(200).optional(),
+  design_language: z.string().trim().max(400).optional(),
+  imagery_style: z.string().trim().max(400).optional(),
+  graphic_style: z.string().trim().max(400).optional(),
+  brand_personality: z.string().trim().max(400).optional(),
+  visual_style: z.string().trim().max(400).optional(),
+  voice: z.string().trim().max(600).optional(),
+  brand_keywords: z.array(z.string().trim().max(60)).max(20).optional(),
+  visual_dos: z.array(z.string().trim().max(200)).max(10).optional(),
+  visual_donts: z.array(z.string().trim().max(200)).max(10).optional(),
+  content_dos: z.array(z.string().trim().max(200)).max(10).optional(),
+  content_donts: z.array(z.string().trim().max(200)).max(10).optional(),
+  /** Hand a field back to discovery: unlock it and let the next analysis fill it. */
+  unlock: z.array(z.string().max(40)).max(30).optional(),
+});
+
 export const updateContentInput = z.object({
   hook: z.string().max(300).optional(), caption: z.string().max(2200).optional(), cta: z.string().max(200).optional(), hashtags: z.array(z.string()).max(30).optional(), scheduled_for: z.string().datetime().optional(),
   status: z.enum(['draft', 'approval_required', 'approved', 'scheduled', 'publishing', 'published', 'failed', 'review_required']).optional(),

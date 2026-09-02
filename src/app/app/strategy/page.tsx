@@ -10,6 +10,8 @@ import {
   listPillars,
 } from '@/lib/db/repo';
 import { StrategyView } from '@/components/app/StrategyView';
+import { BrandIdentityPanel } from '@/components/app/BrandIdentityPanel';
+import { identityFrom } from '@/lib/brand/identity';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Marketing Strategy' };
@@ -44,15 +46,37 @@ export default async function StrategyPage() {
     );
   }
 
+  // What the repository was read to say about how this product looks. Shown
+  // alongside the voice, because the two together are the brand: a founder who
+  // can see the source of a wrong colour can correct it in one pass.
+  const identity = identityFrom(analysis);
+
   return (
-    <StrategyView
-      projectId={project.id}
-      projectName={project.name}
-      strategy={strategy}
-      pillars={pillars}
-      campaigns={campaigns}
-      brand={brand}
-      personas={personas}
-    />
+    <>
+      <StrategyView
+        projectId={project.id}
+        projectName={project.name}
+        strategy={strategy}
+        pillars={pillars}
+        campaigns={campaigns}
+        brand={brand}
+        personas={personas}
+      />
+      <div className="mx-auto max-w-5xl px-4 pb-16 sm:px-8">
+        <BrandIdentityPanel
+          projectId={project.id}
+          projectName={project.name}
+          brand={brand}
+          discovery={
+            identity
+              ? {
+                  read_from: identity.evidence.style_files,
+                  not_found: identity.evidence.unresolved,
+                }
+              : null
+          }
+        />
+      </div>
+    </>
   );
 }

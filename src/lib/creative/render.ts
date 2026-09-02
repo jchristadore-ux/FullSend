@@ -12,6 +12,7 @@
 import 'server-only';
 import { type TenantScope } from '../db';
 import { db } from '../db/repo';
+import { paletteFor, type RenderPalette } from '../brand/identity';
 import { newId, nowIso } from '../ids';
 import type {
   BrandProfile,
@@ -46,11 +47,17 @@ export async function renderCreative(
   const size = CANVAS[item.format] ?? CANVAS.static;
   const assets: CreativeAsset[] = [];
 
-  const palette = {
-    accent: brand.primary_color || '#FF5A1F',
-    fg: brand.secondary_color || '#FFFFFF',
-    bg: brand.background_color || '#08090A',
-  };
+  /*
+   * The project's palette and type, or a neutral — never FullSend's.
+   *
+   * This used to read `brand.primary_color || '#FF5A1F'` with the typeface
+   * hardcoded to Archivo, which meant every card FullSend produced for every
+   * product came out in FullSend's orange and FullSend's type. `paletteFor`
+   * resolves each slot from the brand profile independently and falls back to
+   * an achromatic neutral, which is honest about not knowing rather than
+   * claiming something false about somebody else's product.
+   */
+  const palette = paletteFor(brand);
 
   if (item.format === 'carousel' && item.slides?.length) {
     for (let i = 0; i < item.slides.length; i++) {
@@ -197,6 +204,19 @@ function esc(s: string): string {
 }
 
 /**
+ * A font stack, safe to place inside an SVG attribute.
+ *
+ * Font stacks now come from a parsed stylesheet rather than a constant, so
+ * they are untrusted text on a path that builds markup. Quotes and angle
+ * brackets are escaped, and anything that could close the attribute or start
+ * a tag is dropped outright — a family name has no business containing either.
+ */
+function escAttr(stack: string): string {
+  const cleaned = stack.replace(/[<>"'`;{}]/g, '').replace(/\s+/g, ' ').trim();
+  return esc(cleaned || 'sans-serif');
+}
+
+/**
  * Greedy line breaking against an average glyph width. Good enough for display
  * type at these sizes, and avoids needing a font metrics library server-side.
  */
@@ -222,11 +242,12 @@ export function wrapText(text: string, maxChars: number, maxLines: number): stri
   return lines;
 }
 
-interface Palette {
-  accent: string;
-  fg: string;
-  bg: string;
-}
+/**
+ * What a card is drawn with. Sourced from the project's own brand profile via
+ * `paletteFor`, so a font stack is always a real stack and a colour is always
+ * either the product's or a neutral.
+ */
+type Palette = RenderPalette;
 
 function baseDefs(palette: Palette, id: string): string {
   return `<defs>
@@ -265,13 +286,13 @@ ${baseDefs(palette, id)}
 <rect width="${size.w}" height="${size.h}" fill="url(#grid-${id})"/>
 <rect width="${size.w}" height="${size.h}" fill="url(#glow-${id})"/>
 <rect x="0" y="0" width="${Math.round(size.w * 0.018)}" height="${size.h}" fill="${palette.accent}"/>
-<g font-family="Archivo, Helvetica Neue, Arial, sans-serif">
+<g font-family="${escAttr(palette.bodyFont)}">
   <text x="${pad}" y="${pad + 30}" font-size="${Math.round(size.w * 0.028)}" font-weight="700"
         letter-spacing="4" fill="${palette.accent}">${esc(badge)}</text>
 ${lines
   .map(
     (l, i) =>
-      `  <text x="${pad}" y="${Math.round(startY + i * lineHeight)}" font-size="${Math.round(fontSize)}" font-weight="800" letter-spacing="-2" fill="${palette.fg}">${esc(l)}</text>`,
+      `  <text x="${pad}" y="${Math.round(startY + i * lineHeight)}" font-family="${escAttr(palette.headingFont)}" font-size="${Math.round(fontSize)}" font-weight="800" letter-spacing="-2" fill="${palette.fg}">${esc(l)}</text>`,
   )
   .join('\n')}
   <rect x="${pad}" y="${size.h - pad - 92}" width="${Math.round(size.w * 0.26)}" height="6" fill="${palette.accent}"/>
@@ -309,13 +330,13 @@ ${baseDefs(palette, id)}
 <rect width="${size.w}" height="${size.h}" fill="${palette.bg}"/>
 <rect width="${size.w}" height="${size.h}" fill="url(#grid-${id})"/>
 ${isCover ? `<rect width="${size.w}" height="${size.h}" fill="url(#glow-${id})"/>` : ''}
-<g font-family="Archivo, Helvetica Neue, Arial, sans-serif">
+<g font-family="${escAttr(palette.bodyFont)}">
   <text x="${pad}" y="${pad + 24}" font-size="${Math.round(size.w * 0.026)}" font-weight="700"
         letter-spacing="4" fill="${palette.accent}">${index + 1} / ${total}</text>
 ${headLines
   .map(
     (l, i) =>
-      `  <text x="${pad}" y="${Math.round(headStart + i * headSize * 1.1)}" font-size="${Math.round(headSize)}" font-weight="800" letter-spacing="-2" fill="${palette.fg}">${esc(l)}</text>`,
+      `  <text x="${pad}" y="${Math.round(headStart + i * headSize * 1.1)}" font-family="${escAttr(palette.headingFont)}" font-size="${Math.round(headSize)}" font-weight="800" letter-spacing="-2" fill="${palette.fg}">${esc(l)}</text>`,
   )
   .join('\n')}
 ${bodyLines

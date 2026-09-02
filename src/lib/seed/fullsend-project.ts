@@ -533,17 +533,49 @@ async function upsertSelfBrand(
       'The Send Score': 'A 0–100 read on marketing momentum',
       'Next Move': 'FullSend’s own recommendation, already acted on under Full Send',
     },
+    /*
+     * FullSend's own colours, on FullSend's own project, which is the one
+     * place they belong. Every other project reads its palette out of its own
+     * repository — see brand/discover.ts. This row is the internal project
+     * FullSend uses to market itself, so here the engine and the brand really
+     * are the same thing.
+     */
+    brand_name: 'FullSend',
     primary_color: FULLSEND_COLORS.orange,
     secondary_color: FULLSEND_COLORS.white,
+    accent_color: FULLSEND_COLORS.orange,
     background_color: FULLSEND_COLORS.void,
+    text_color: FULLSEND_COLORS.white,
+    heading_font: 'Archivo, Helvetica Neue, Arial, sans-serif',
+    body_font: 'Archivo, Helvetica Neue, Arial, sans-serif',
+    logo_url: null,
+    logo_dark_url: null,
     visual_style:
       'Dark command centre. Electric orange accent, white type, sharp edges, real UI over stock ' +
       'imagery. No gradients, no purple AI aesthetic.',
+    design_language: 'Dense, high-contrast, terminal-adjacent. Sharp corners, hard rules, no soft shadows.',
+    imagery_style: 'Real product UI and real numbers. Never stock photography, never abstract 3D.',
+    graphic_style: 'Flat, typographic, one accent colour doing all the work.',
+    icon_style: 'Minimal line icons, uniform stroke, no fills.',
+    brand_personality: 'Bold, decisive, slightly irreverent. Founder to founder.',
+    brand_keywords: ['autonomous', 'marketing engine', 'full send', 'founder', 'shipping'],
+    visual_dos: ['Use the orange as a single accent', 'Show real product UI', 'Keep type tight and large'],
+    visual_donts: [
+      'Never use another product’s colours, typefaces or logo',
+      'No gradients',
+      'No purple AI aesthetic',
+      'No stock photography',
+    ],
+    content_dos: ['Say the thing', 'Lead with the result', 'One call to action'],
+    content_donts: ['No rhetorical throat-clearing', 'No claims the product cannot back'],
     words_to_use: [...FULLSEND_VOICE.wordsToUse],
     words_to_avoid: [...FULLSEND_VOICE.wordsToAvoid],
     positioning: strategy.positioning,
     ctas: strategy.cta_strategy,
     emoji_policy: 'sparing' as const,
+    identity_sources: {},
+    locked_fields: [],
+    identity_discovered_at: null,
     updated_at: nowIso(),
   };
 

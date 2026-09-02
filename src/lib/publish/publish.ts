@@ -16,6 +16,7 @@ import { logger } from '../logger';
 import { publicUrlsFor } from '../creative/media';
 import { runQualityControl } from '../qc/check';
 import { getUsableConnection, markNeedsAttention } from '../social/connections';
+import { assertPublishable, pinDestination, type PublishTarget } from './guard';
 import { getAdapter } from '../social/registry';
 import type { PublishResult } from '../social/types';
 import type {
@@ -55,6 +56,23 @@ export async function publishScheduledPost(
   }
   if (post.status === 'published') {
     return { status: 'published' };
+  }
+
+  /*
+   * Before anything else, and before the post is even marked as publishing:
+   * prove that the post, its content, its brand and its destination all belong
+   * to the same project. One engine drives several products, and a post
+   * appearing on the wrong product's feed is the one failure here that cannot
+   * be undone. The guard fails closed — see publish/guard.ts.
+   */
+  let target: PublishTarget;
+  try {
+    target = await assertPublishable(scope, { post, project, content });
+  } catch (e) {
+    const err = isFullSendError(e)
+      ? e
+      : new FullSendError('cross_project_block', String(e), { retryable: false });
+    return finalizeFailure(scope, post, err.message, err.remedy, project, content);
   }
 
   await db().update(scope, 'scheduled_posts', post.id, {
@@ -97,7 +115,31 @@ export async function publishScheduledPost(
       return { status: 'blocked', error: 'Quality control blocked this post' };
     }
 
+    /*
+     * The destination is now recorded on the post, so every later attempt —
+     * a retry, a recovery, a run after the founder has connected a different
+     * account — targets this account or refuses. Written before the platform
+     * is asked to do anything irreversible.
+     */
+    await pinDestination(scope, post, target.account);
+
     const connection = await getUsableConnection(scope, project.id, post.platform);
+    if (connection.account.id !== target.account.id) {
+      // The project's current account is not the one this post was scheduled
+      // to. Publishing to it would be exactly the silent retarget the guard
+      // exists to prevent, so the post waits for its own account instead.
+      throw new FullSendError(
+        'cross_project_block',
+        `This post was scheduled to @${target.account.username}, which is no longer ${project.name}'s connected ${post.platform} account`,
+        {
+          status: 409,
+          retryable: false,
+          remedy:
+            `Reconnect @${target.account.username}, or delete this scheduled post and re-schedule ` +
+            'the content to the account you want it on. FullSend will not move it for you.',
+        },
+      );
+    }
     const adapter = getAdapter(post.platform);
     const caption = buildCaption(content);
 

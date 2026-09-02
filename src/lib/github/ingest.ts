@@ -9,6 +9,7 @@
 import 'server-only';
 import { logger } from '../logger';
 import type { AppScreen } from '../types';
+import { discoverBrandIdentity, type BrandIdentity } from '../brand/discover';
 import { GitHubClient, type RepoMeta, type RepoRef, type TreeEntry } from './client';
 
 const log = logger('github.ingest');
@@ -39,6 +40,12 @@ export interface RepoBundle {
   screens: AppScreen[];
   /** The commit this bundle describes. The identity of an analysis. */
   commitSha: string | null;
+  /**
+   * What the repository says about how the product looks. Read, never
+   * invented — a field no file answers arrives unresolved so the founder can
+   * correct it, rather than as a guess they have no reason to doubt.
+   */
+  identity: BrandIdentity;
 }
 
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg)$/i;
@@ -79,6 +86,29 @@ export async function ingestRepository(
   const routes = detectRoutes(files);
   const screens = await buildScreens(ref, client, meta, files, routes, readme);
 
+  /*
+   * Never allowed to fail the ingestion. A repository whose brand cannot be
+   * read is still a product worth marketing; the founder fills the profile in
+   * by hand, and every field arrives marked unresolved so they know to.
+   */
+  const identity = await discoverBrandIdentity(ref, client, meta.default_branch, files).catch(
+    (e): BrandIdentity => {
+      log.warn('brand discovery failed; the profile stays unknown rather than guessed', {
+        repo: meta.full_name,
+        error: String(e),
+      });
+      return {
+        evidence: {
+          style_files: [],
+          color_tokens: [],
+          font_families: [],
+          logo_candidates: [],
+          unresolved: ['primary_color', 'heading_font', 'body_font', 'logo_url'],
+        },
+      };
+    },
+  );
+
   const signals: RepoSignals = {
     languages,
     dependencies,
@@ -108,9 +138,10 @@ export async function ingestRepository(
     routes: routes.length,
     screens: screens.length,
     images: signals.repo_images.length,
+    brandUnresolved: identity.evidence.unresolved.length,
   });
 
-  return { meta, signals, screens, commitSha };
+  return { meta, signals, screens, commitSha, identity };
 }
 
 /**

@@ -51,6 +51,18 @@ export async function scheduleContent(scope: TenantScope, project: Project, item
       try { for (const asset of assets) { const ready = await ensurePublicCreative(asset); if (ready.url !== asset.url || ready.storage_path !== asset.storage_path || ready.mime_type !== asset.mime_type) await db().update(scope, 'creative_assets', asset.id, { url: ready.url, storage_path: ready.storage_path, mime_type: ready.mime_type }); } }
       catch (e) { skipped.push({ contentId: item.id, reason: e instanceof Error ? e.message : String(e) }); continue; }
     }
+    /*
+     * The destination is recorded here, at scheduling time, and the publisher
+     * treats it as binding from then on. Connecting a different Instagram
+     * account to this project later must not move posts that were already
+     * queued — see publish/guard.ts.
+     *
+     * Scheduling without a connection is still allowed: building the calendar
+     * is step three and connecting an account is step four, and Meta's review
+     * can take weeks. Such a post gets its destination pinned on the first
+     * publish attempt instead, and until then the calendar is honest that
+     * nothing is connected.
+     */
     const account = await getSocialAccount(scope, project.id, 'instagram'); if (!account || account.status === 'disconnected') log.info('scheduling without a live Instagram connection', { project: project.id });
     const existing = await db().findOne(scope, 'scheduled_posts', { where: { project_id: project.id, content_item_id: item.id } }); if (existing) { skipped.push({ contentId: item.id, reason: 'Already scheduled' }); continue; }
     const post = await db().insert(scope, 'scheduled_posts', { id: newId(), project_id: project.id, content_item_id: item.id, social_account_id: account?.id ?? null, platform: 'instagram', scheduled_for: item.scheduled_for, timezone: project.timezone, status: 'scheduled', attempts: 0, last_error: null, next_attempt_at: null, created_at: nowIso(), started_at: null, platform_container_id: null, publish_submitted_at: null, published_at: null });

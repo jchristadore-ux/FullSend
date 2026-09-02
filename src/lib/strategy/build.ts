@@ -7,6 +7,12 @@
 import 'server-only';
 import { generateObject } from '../ai/client';
 import { FULLSEND_VOICE } from '../brand/fullsend-brand';
+import {
+  applyRespectingLocks,
+  identityFrom,
+  identityPatch,
+  logIdentityOutcome,
+} from '../brand/identity';
 import { type TenantScope } from '../db';
 import { db, getBrandProfile, getStrategy } from '../db/repo';
 import { newId, nowIso } from '../ids';
@@ -56,14 +62,28 @@ Hold to these:
 
 Return JSON only.`;
 
-const BRAND_SYSTEM = `You are FullSend's brand director.
+const BRAND_SYSTEM = `You are FullSend's brand director, working on THIS product's brand — not FullSend's.
 
-Define the persistent voice for this product: how it sounds, what words it uses,
-what words it never uses. This profile is attached to every single post the
-machine generates, so it must be concrete and enforceable, not aspirational.
+Define the persistent identity for this product: how it sounds, what words it uses,
+what words it never uses, and how its visuals should feel. This profile is attached
+to every single post the machine generates, so it must be concrete and enforceable,
+not aspirational.
+
+You may be shown the product's real visual identity, read out of its own repository:
+its colours, its typefaces, its logo, and the files each came from. Describe and
+build on what you are shown. Never contradict it, and never state a colour or a
+typeface yourself — those are read from the repository, not chosen by you, and any
+you name would be ignored.
+
+If you are shown no visual identity, say so in the descriptive fields rather than
+inventing one. "The repository does not state a visual style" is a useful answer.
+A confident invention is not, because nobody downstream can tell it from a reading.
 
 "words_to_avoid" should include the specific AI-slop phrases that would make
 this product's content sound generated, plus anything off-brand for its audience.
+
+"visual_donts" must include using another product's colours, typefaces or logo —
+above all FullSend's. FullSend is the engine; this product is the brand.
 
 Instagram is the only production platform in scope.
 
@@ -282,10 +302,22 @@ export async function buildBrandProfile(
   analysis: ProductAnalysis,
   strategy: MarketingStrategy,
 ): Promise<{ brand: BrandProfile; costUsd: number }> {
+  const existing = await getBrandProfile(scope, project.id);
+
+  /*
+   * The product's real visual identity, parsed out of its own repository when
+   * the analysis ran. It is shown to the model so the description it writes is
+   * about the actual product, and it is written to the profile directly —
+   * those are two separate paths on purpose. Nothing the model says can become
+   * a colour or a typeface.
+   */
+  const identity = identityFrom(analysis);
+  const discovered = identityPatch(identity, existing);
+
   const { data, costUsd } = await generateObject({
     task: 'brand.profile',
     system: BRAND_SYSTEM,
-    brief: `Define the brand voice for ${project.name}.`,
+    brief: `Define the brand for ${project.name}. This is ${project.name}'s brand, not FullSend's.`,
     context: {
       project_name: project.name,
       analysis: {
@@ -299,6 +331,28 @@ export async function buildBrandProfile(
         audience_summary: strategy.audience_summary,
         cta_strategy: strategy.cta_strategy,
       },
+      // Read from the repository. Present so the description matches the
+      // product; absent when the repository said nothing, in which case the
+      // system prompt requires the model to say so rather than invent.
+      visual_identity_from_repository: identity
+        ? {
+            colors: {
+              primary: identity.primary_color?.value ?? null,
+              secondary: identity.secondary_color?.value ?? null,
+              accent: identity.accent_color?.value ?? null,
+              background: identity.background_color?.value ?? null,
+              text: identity.text_color?.value ?? null,
+            },
+            typography: {
+              heading: identity.heading_font?.value ?? null,
+              body: identity.body_font?.value ?? null,
+            },
+            logo: identity.logo_url?.value ?? null,
+            read_from: identity.evidence.style_files,
+            named_color_tokens: identity.evidence.color_tokens.slice(0, 25),
+            not_found_in_repository: identity.evidence.unresolved,
+          }
+        : null,
       baseline_words_to_avoid: FULLSEND_VOICE.wordsToAvoid,
     },
     schema: brandProfileSchema,
@@ -307,32 +361,74 @@ export async function buildBrandProfile(
 
   const wordsToAvoid = [...new Set([...FULLSEND_VOICE.wordsToAvoid, ...data.words_to_avoid])];
 
-  const patch = {
+  const described = {
+    brand_name: data.brand_name || project.name,
     voice: data.voice,
     tone_attributes: data.tone_attributes,
     audience: data.audience || strategy.audience_summary,
     messaging_pillars: data.messaging_pillars,
     terminology: data.terminology,
     visual_style: data.visual_style,
+    design_language: data.design_language,
+    imagery_style: data.imagery_style,
+    graphic_style: data.graphic_style,
+    icon_style: data.icon_style,
+    brand_personality: data.brand_personality,
+    brand_keywords: data.brand_keywords,
+    visual_dos: data.visual_dos,
+    visual_donts: data.visual_donts,
+    content_dos: data.content_dos,
+    content_donts: data.content_donts,
     words_to_use: data.words_to_use,
     words_to_avoid: wordsToAvoid,
     positioning: data.positioning || strategy.positioning,
     ctas: data.ctas.length ? data.ctas : strategy.cta_strategy,
     emoji_policy: data.emoji_policy,
-    updated_at: nowIso(),
   };
 
-  const existing = await getBrandProfile(scope, project.id);
-  const brand = existing
-    ? await db().update(scope, 'brand_profiles', existing.id, patch)
-    : await db().insert(scope, 'brand_profiles', {
-        id: newId(),
-        project_id: project.id,
-        primary_color: '#FF5A1F',
-        secondary_color: '#FFFFFF',
-        background_color: '#08090A',
-        ...patch,
-      });
+  const identitySources = { ...(existing?.identity_sources ?? {}), ...discovered.sources };
+  logIdentityOutcome(project.id, discovered);
+
+  if (existing) {
+    // Locked fields drop out here, so a founder's correction survives every
+    // later re-analysis rather than being quietly reverted by one.
+    const brand = await db().update(scope, 'brand_profiles', existing.id, {
+      ...applyRespectingLocks(existing, described),
+      ...discovered.patch,
+      identity_sources: identitySources,
+      updated_at: nowIso(),
+    });
+    return { brand, costUsd };
+  }
+
+  const brand = await db().insert(scope, 'brand_profiles', {
+    id: newId(),
+    project_id: project.id,
+    /*
+     * Empty, not FullSend's palette.
+     *
+     * These used to be seeded with `#FF5A1F` / `#FFFFFF` / `#08090A` —
+     * FullSend's own colours — so every project FullSend marketed came out
+     * wearing them. Empty means unknown: the renderer draws a neutral, and the
+     * founder is told what was not found rather than shown a confident wrong
+     * answer. Anything discovered in the repository overwrites these below.
+     */
+    primary_color: '',
+    secondary_color: '',
+    accent_color: '',
+    background_color: '',
+    text_color: '',
+    heading_font: '',
+    body_font: '',
+    logo_url: null,
+    logo_dark_url: null,
+    locked_fields: [],
+    identity_discovered_at: null,
+    ...described,
+    ...discovered.patch,
+    identity_sources: identitySources,
+    updated_at: nowIso(),
+  });
 
   return { brand, costUsd };
 }
