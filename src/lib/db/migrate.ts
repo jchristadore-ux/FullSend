@@ -64,13 +64,14 @@ function checksum(sql: string): string {
   return createHash('sha256').update(sql).digest('hex').slice(0, 16);
 }
 
-function notConfigured(): MigrationReport {
+function notConfigured(reason?: string): MigrationReport {
   return {
     connected: false,
     reason:
+      reason ??
       'SUPABASE_DB_URL is not set, so FullSend cannot apply migrations itself. ' +
-      'Supabase → Project Settings → Database → Connection string → Session pooler. ' +
-      'Until it is set, run the files by hand in the SQL editor.',
+        'Supabase → Project Settings → Database → Connection string → Session pooler. ' +
+        'Until it is set, run the files by hand in the SQL editor.',
     migrations: MIGRATIONS.map((m) => ({
       name: m.name,
       applied: false,
@@ -108,7 +109,30 @@ async function connect() {
 
 /** What this database has, and what it is missing. */
 export async function migrationReport(): Promise<MigrationReport> {
-  const client = await connect();
+  /*
+   * A connection that cannot be made is a report, not an exception.
+   *
+   * `connect()` throws when SUPABASE_DB_URL is set but wrong — a stale
+   * password, the direct connection string where the pooler is needed, an
+   * unreachable host. That throw became a 500, and the Control Room card,
+   * having nothing to render, drew nothing at all: the schema panel simply
+   * was not on the page, with no way to tell "not configured" from "broken".
+   *
+   * The connection failure is the single most useful thing to know here, so
+   * it is reported in the place built to explain why migrations cannot run.
+   */
+  let client: Awaited<ReturnType<typeof connect>>;
+  try {
+    client = await connect();
+  } catch (e) {
+    return notConfigured(
+      `SUPABASE_DB_URL is set, but connecting to it failed: ${
+        e instanceof Error ? e.message : String(e)
+      }. Supabase → Project Settings → Database → Connection string → Session pooler; ` +
+        'copy it whole and re-paste the password. Until it connects, run the migration files ' +
+        'by hand in the SQL editor.',
+    );
+  }
   if (!client) return notConfigured();
 
   try {
