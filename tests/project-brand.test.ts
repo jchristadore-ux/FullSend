@@ -656,10 +656,18 @@ describe('content composed from templates is held for a human', () => {
     // Structurally valid — which is exactly why nothing downstream stopped it.
     expect(item.slides.length).toBeGreaterThan(0);
     expect(item.slides.every((s: { headline: string }) => s.headline.length > 0)).toBe(true);
-    // And generic: the same body, repeated, saying nothing about the product.
-    const bodies = item.slides.map((s: { body: string }) => s.body);
-    expect(new Set(bodies).size).toBeLessThan(bodies.length);
-    // The provider names itself, which is what the caller keys the hold on.
+
+    /*
+     * Note what is no longer asserted here. This used to check that the bodies
+     * repeated, because they did: four slides of "Applies directly to {topic}."
+     * That is fixed — the composer now builds education slides from the
+     * product's own feature list — so asserting it would be asserting the bug.
+     *
+     * What survives is the property the hold actually keys on: templates are
+     * generic by construction however well written, so the provider names
+     * itself and the caller decides. "The composer never writes what quality
+     * control blocks" below is the stronger replacement.
+     */
     expect(res.provider).toBe('deterministic');
   });
 
@@ -914,5 +922,130 @@ describe('quality control reads inside a carousel', () => {
     });
     // 3 slides, 2 distinct: 2*2 = 4 > 3, so it passes.
     expect(qc.findings.some((f) => f.check === 'repetitive')).toBe(false);
+  });
+});
+
+/**
+ * The composer and the gate, held together.
+ *
+ * These two were written a day apart and did not agree: the composer produced
+ * education carousels with four identical slide bodies, and the quality gate
+ * blocks exactly that. Nothing tied them, so the disagreement surfaced only in
+ * the end-to-end run — and only on some days, because which post lands in
+ * which slot depends on the wall clock. A change whose test outcome depends on
+ * the date is a change that has not really been tested.
+ *
+ * This is the invariant that keeps them honest, and it does not care what day
+ * it is: whatever the composer writes must survive the gate the product
+ * publishes through.
+ */
+describe('the composer never writes what quality control blocks', () => {
+  const PILLARS = [
+    'education',
+    'product_demo',
+    'entertainment',
+    'social_proof',
+    'promotion',
+  ] as const;
+
+  async function compose(pillarType: string, features: { name: string; description: string }[]) {
+    const { DeterministicProvider } = await import('@/lib/ai/deterministic-provider');
+    const res = await new DeterministicProvider().complete({
+      task: 'content.batch',
+      tier: 'standard',
+      system: '',
+      messages: [
+        {
+          role: 'user',
+          content: JSON.stringify({
+            context: {
+              project_name: 'AfterIDo',
+              analysis: {
+                category: 'Life admin app',
+                features,
+                screens: [],
+                differentiators: [],
+                problem_solved: 'doing it by hand',
+              },
+              brand: { ctas: ['Get AfterIDo'] },
+              briefs: [
+                {
+                  seed: `seed-${pillarType}`,
+                  platform: 'instagram',
+                  format: 'carousel',
+                  pillar_type: pillarType,
+                  topic: 'the name-change order',
+                },
+              ],
+            },
+          }),
+        },
+      ],
+    } as never);
+    return JSON.parse(res.text).items[0];
+  }
+
+  const RICH = [
+    { name: 'Ordered task list', description: 'Every agency in the order that actually works.' },
+    { name: 'Pre-filled forms', description: 'Your details, already entered.' },
+    { name: 'Progress tracking', description: 'What is done and what is next.' },
+  ];
+
+  for (const pillar of PILLARS) {
+    it(`passes its own gate for a ${pillar} carousel`, async () => {
+      const item = await compose(pillar, RICH);
+
+      /*
+       * Distinct bodies, asserted directly rather than inferred from the gate
+       * passing. The gate's threshold is a ratio, so a carousel whose slide
+       * count happened to come out small could carry a repeat and still slip
+       * through — which is exactly what the old composer did on some seeds.
+       * The invariant is that no two slides say the same thing, and that does
+       * not depend on the seed.
+       */
+      const bodies = item.slides.map((s: { body: string }) => s.body.trim().toLowerCase());
+      expect(new Set(bodies).size).toBe(bodies.length);
+
+      const blocked = runQualityControl({ item, analysis: null, brand: null }).findings.filter(
+        (f) => f.severity === 'block',
+      );
+      expect(blocked).toEqual([]);
+    });
+  }
+
+  it('passes even when the analysis found no feature descriptions', async () => {
+    // The padding case: without descriptions the body has to be built from
+    // something that still differs per slide.
+    const item = await compose('education', [
+      { name: 'Ordered task list', description: '' },
+      { name: 'Pre-filled forms', description: '' },
+      { name: 'Progress tracking', description: '' },
+    ]);
+    const bodies = item.slides.map((s: { body: string }) => s.body.trim().toLowerCase());
+    expect(new Set(bodies).size).toBe(bodies.length);
+    expect(runQualityControl({ item, analysis: null, brand: null }).findings
+      .filter((f) => f.severity === 'block')).toEqual([]);
+  });
+
+  it('writes a shorter carousel rather than padding a thin analysis', async () => {
+    // One feature is not a list. Inventing three more to fill slides is the
+    // failure this whole area exists to prevent.
+    const item = await compose('education', [{ name: 'Ordered task list', description: 'The order.' }]);
+    expect(item.slides.length).toBeGreaterThanOrEqual(2);
+    const bodies = item.slides.map((s: { body: string }) => s.body.trim().toLowerCase());
+    expect(new Set(bodies).size).toBe(bodies.length);
+  });
+
+  it('builds education slides from the product, not from stock advice', async () => {
+    const item = await compose('education', RICH);
+    const text = JSON.stringify(item.slides);
+    // The four aphorisms that actually published.
+    expect(text).not.toContain('Start smaller than you think');
+    expect(text).not.toContain('Automate the repeat');
+    expect(text).not.toContain('Measure one thing');
+    expect(text).not.toContain('Ship before it feels ready');
+    // Replaced by the product's own verified features.
+    expect(text).toContain('Ordered task list');
+    expect(text).toContain('Pre-filled forms');
   });
 });
