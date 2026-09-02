@@ -608,3 +608,223 @@ describe('a post can only ever publish to its own project', () => {
     expect(new Set(targets.map((t) => t.account.id)).size).toBe(3);
   });
 });
+
+/**
+ * Composed content never reaches a feed unseen.
+ *
+ * `generateObject` falls back to the deterministic composer when a provider
+ * call fails, rather than losing the run. For a marketing plan that is the
+ * right trade — it is scaffolding a founder reviews. For content it is not,
+ * and this is how we learned the difference: a provider timeout composed an
+ * AfterIDo carousel reading "Start smaller than you think" / "Automate the
+ * repeat, not the decision" / "Measure one thing", body "Applies directly to
+ * the name-change order." four times over, and autopilot published it to a
+ * real Instagram account.
+ *
+ * Quality control cannot catch that. It looks for false claims and AI slop,
+ * and none of those sentences is either — they are simply empty, and emptiness
+ * is not a property of a sentence you can test for. Provenance is.
+ */
+describe('content composed from templates is held for a human', () => {
+  it('composes generic filler when the provider fails, and says so', async () => {
+    const { DeterministicProvider } = await import('@/lib/ai/deterministic-provider');
+    const provider = new DeterministicProvider();
+
+    const res = await provider.complete({
+      task: 'content.batch',
+      tier: 'standard',
+      system: '',
+      messages: [
+        {
+          role: 'user',
+          content: JSON.stringify({
+            context: {
+              project_name: 'AfterIDo',
+              analysis: { category: 'Life admin app', features: [], screens: [], differentiators: [] },
+              brand: { ctas: ['Get AfterIDo'] },
+              briefs: [
+                { seed: 's', platform: 'instagram', format: 'carousel', pillar_type: 'education', topic: 'the name-change order' },
+              ],
+            },
+          }),
+        },
+      ],
+    } as never);
+
+    const item = JSON.parse(res.text).items[0];
+    // Structurally valid — which is exactly why nothing downstream stopped it.
+    expect(item.slides.length).toBeGreaterThan(0);
+    expect(item.slides.every((s: { headline: string }) => s.headline.length > 0)).toBe(true);
+    // And generic: the same body, repeated, saying nothing about the product.
+    const bodies = item.slides.map((s: { body: string }) => s.body);
+    expect(new Set(bodies).size).toBeLessThan(bodies.length);
+    // The provider names itself, which is what the caller keys the hold on.
+    expect(res.provider).toBe('deterministic');
+  });
+
+  it('flags a live provider failing over to templates, and only that', async () => {
+    const { setProvider, generateObject } = await import('@/lib/ai/client');
+    const { contentBatchSchema } = await import('@/lib/schemas');
+
+    /*
+     * A configured, live provider that returns unusable JSON — the shape of
+     * the failure that published the AfterIDo carousel. `generateObject`
+     * composes rather than losing the run, and must say that it did.
+     */
+    const failing = {
+      name: 'scripted',
+      live: true,
+      modelFor: () => 'scripted-model',
+      async complete() {
+        return {
+          text: '{"nothing":"usable"}',
+          model: 'scripted-model',
+          provider: 'scripted',
+          usage: { inputTokens: 10, outputTokens: 10, cachedInputTokens: 0 },
+          costUsd: 0.001,
+          cacheHit: false,
+        };
+      },
+    };
+
+    setProvider(failing as never);
+    const degradedRun = await generateObject({
+      task: 'content.batch',
+      system: '',
+      brief: 'one post',
+      context: {
+        project_name: 'AfterIDo',
+        analysis: { category: 'app', features: [], screens: [], differentiators: [] },
+        briefs: [{ seed: 's', platform: 'instagram', format: 'static', pillar_type: 'education', topic: 'x' }],
+      },
+      schema: contentBatchSchema,
+      noCache: true,
+    });
+
+    // The flag is the whole mechanism: without it nothing downstream can tell
+    // a composed post from a written one, and autopilot publishes both.
+    expect(degradedRun.degraded).toBe(true);
+    expect(degradedRun.model).toContain('deterministic');
+
+    /*
+     * And the narrower half of the claim. Running deliberately without an API
+     * key puts the install in mock mode: the composer *is* the provider, that
+     * is the operator's choice, and it is not a degradation. Conflating the
+     * two would hold every post on every no-key install, which is what the
+     * first version of this change did.
+     */
+    setProvider(null);
+    const mockRun = await generateObject({
+      task: 'content.batch',
+      system: '',
+      brief: 'one post',
+      context: {
+        project_name: 'AfterIDo',
+        analysis: { category: 'app', features: [], screens: [], differentiators: [] },
+        briefs: [{ seed: 's2', platform: 'instagram', format: 'static', pillar_type: 'education', topic: 'y' }],
+      },
+      schema: contentBatchSchema,
+      noCache: true,
+    });
+    expect(mockRun.degraded).toBe(false);
+  });
+});
+
+/**
+ * The hold itself, through the real generator.
+ *
+ * The flag test above passes whether or not anything acts on the flag — it
+ * only proves `generateObject` reports the degradation. This one goes through
+ * `generateContent` and asserts the post that comes out cannot publish, which
+ * is the property that was actually missing when the AfterIDo carousel went
+ * live.
+ */
+describe('a degraded batch cannot reach a feed', () => {
+  const FAILING_LIVE_PROVIDER = {
+    name: 'scripted',
+    live: true,
+    modelFor: () => 'scripted-model',
+    async complete() {
+      return {
+        text: '{"nothing":"usable"}',
+        model: 'scripted-model',
+        provider: 'scripted',
+        usage: { inputTokens: 10, outputTokens: 10, cachedInputTokens: 0 },
+        costUsd: 0.001,
+        cacheHit: false,
+      };
+    },
+  };
+
+  async function generateOnePost(provider: unknown | null) {
+    const ctx = await setupContext();
+    const { setProvider } = await import('@/lib/ai/client');
+    const { generateContent } = await import('@/lib/content/generate');
+    const { analyzeProduct } = await import('@/lib/analysis/analyze');
+    const { buildStrategy, ensureBrandProfile, approveStrategy } = await import('@/lib/strategy/build');
+
+    const project = await createProject(ctx.scope, ctx.user.id, { autopilot_mode: 'full_send' });
+
+    // Build the prerequisites on the composer, which is the normal test path.
+    setProvider(null);
+    const analyzed = await analyzeProduct(ctx.scope, project, 'acme/taskflow', {
+      client: fakeGitHubClient(),
+    });
+    const built = await buildStrategy(ctx.scope, project, analyzed.analysis);
+    const { brand } = await ensureBrandProfile(ctx.scope, project, analyzed.analysis, built.strategy);
+    const strategy = await approveStrategy(ctx.scope, built.strategy.id);
+
+    // Only now install the provider under test, so the failure lands on the
+    // content call rather than on the setup.
+    setProvider(provider as never);
+    const result = await generateContent(ctx.scope, {
+      project,
+      analysis: analyzed.analysis,
+      brand,
+      strategy,
+      personas: [],
+      pillars: built.pillars,
+      campaigns: built.campaigns,
+      slots: [
+        {
+          platform: 'instagram' as const,
+          format: 'carousel' as const,
+          pillarType: 'education' as const,
+          at: new Date(Date.now() + 86_400_000),
+        },
+      ],
+    });
+    setProvider(null);
+    return { ctx, result };
+  }
+
+  it('holds the post for review instead of approving it', async () => {
+    const { result } = await generateOnePost(FAILING_LIVE_PROVIDER);
+
+    expect(result.created).toHaveLength(1);
+    const post = result.created[0];
+    // Full send mode would otherwise have approved this and scheduled it.
+    expect(post.status).toBe('review_required');
+    expect(post.status).not.toBe('approved');
+  });
+
+  it('tells the founder why, rather than leaving it to be discovered', async () => {
+    const { ctx, result } = await generateOnePost(FAILING_LIVE_PROVIDER);
+    expect(result.created.length).toBeGreaterThan(0);
+
+    const notifications = await db().find(ctx.scope, 'notifications', {
+      where: { user_id: ctx.user.id },
+    });
+    const held = notifications.find((n) => n.title.includes('rewriting'));
+    expect(held).toBeTruthy();
+    expect(held!.body).toContain('provider failed');
+  });
+
+  it('leaves a deliberate no-key install publishing as before', async () => {
+    // Mock mode is a choice, not a degradation. Holding here would stop every
+    // no-key install dead, which is what the first version of this did.
+    const { result } = await generateOnePost(null);
+    expect(result.created.length).toBeGreaterThan(0);
+    expect(result.created.some((c) => c.status === 'approved')).toBe(true);
+  });
+});
