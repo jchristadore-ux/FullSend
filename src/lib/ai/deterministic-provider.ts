@@ -821,16 +821,53 @@ function bodyFor(
   const options = CAPTION_VARIANTS[pillar];
   const caption = options[variant % options.length](vars);
 
-  const slides =
-    pillar === 'education'
+  /*
+   * Education carousels are built from the product's own feature list.
+   *
+   * They used to be four hardcoded aphorisms — "Start smaller than you think",
+   * "Automate the repeat, not the decision", "Measure one thing", "Ship before
+   * it feels ready" — each under the identical body "Applies directly to
+   * {topic}." That is four slides that say one thing, and the one thing is not
+   * about the product. A carousel of it published to a real Instagram account
+   * and read as blank.
+   *
+   * The material to do better was already here. `analysis.features` comes from
+   * README headings and routes — evidence from the repository, not invention —
+   * and every feature has a name and usually a description. One slide each
+   * gives a carousel that is genuinely about the product and genuinely varied,
+   * because the features differ from one another.
+   *
+   * Where a feature has no description, the sentence is built around its name,
+   * which still differs per slide. Nothing here can produce two identical
+   * bodies, which is what `qc/check.ts` now blocks.
+   */
+  const namedFeatures: { name: string; description?: string }[] = (analysis.features ?? [])
+    .filter((f: any) => typeof f?.name === 'string' && f.name.trim().length > 0)
+    .slice(0, 5);
+
+  const educationSlides =
+    namedFeatures.length >= 2
       ? [
-          { headline: `${n} things about ${topic}`, body: 'Swipe →' },
-          ...Array.from({ length: Math.min(n, 4) }, (_, i) => ({
-            headline: `${i + 1}. ${['Start smaller than you think', 'Automate the repeat, not the decision', 'Measure one thing', 'Ship before it feels ready'][i]}`,
-            body: `Applies directly to ${topic.toLowerCase()}.`,
+          { headline: `${namedFeatures.length} things ${productName} does`, body: 'Swipe →' },
+          ...namedFeatures.map((f, i) => ({
+            headline: `${i + 1}. ${f.name}`,
+            body:
+              String(f.description ?? '').trim() ||
+              `${f.name} is how ${productName} handles ${topic.toLowerCase()}.`,
           })),
           { headline: `That's it.`, body: `${productName} does all of this for you.` },
         ]
+      : // Too little to say for a list. A short, honest carousel beats a padded
+        // one — the alternative is inventing features to fill slides.
+        [
+          { headline: featureName, body: `Inside ${productName}` },
+          { headline: 'The old way', body: String(pain) },
+          { headline: 'The new way', body: `${featureName}, handled.` },
+        ];
+
+  const slides =
+    pillar === 'education'
+      ? educationSlides
       : [
           { headline: featureName, body: `Inside ${productName}` },
           { headline: 'The old way', body: String(pain) },
