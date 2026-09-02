@@ -36,13 +36,25 @@ export function BrandIdentityPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
 
   if (!brand) {
     return (
       <Panel title="Brand identity">
         <p className="text-dim">
-          No brand profile yet. It is built from the repository analysis — run that first.
+          No brand profile yet. It is built from the repository analysis.
         </p>
+        <button
+          type="button"
+          onClick={reread}
+          disabled={refreshing}
+          className="mt-4 border border-edge bg-charcoal px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-mist disabled:opacity-40"
+        >
+          {refreshing ? 'Starting…' : 'Read the repository'}
+        </button>
+        {note && <p className="mt-3 text-xs text-live">{note}</p>}
+        {error && <p className="mt-3 text-xs text-fail">{error}</p>}
       </Panel>
     );
   }
@@ -74,6 +86,56 @@ export function BrandIdentityPanel({
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
+    }
+  }
+
+  /**
+   * Read the repository again, and rebuild the brand from what it says.
+   *
+   * `POST /api/projects/:id/analyze` has always accepted `refresh`, and until
+   * now nothing in the app called it — the endpoint existed and was
+   * unreachable, so a founder whose pipeline had completed had no way to ask
+   * for a fresh reading at all. That matters most for exactly this panel: a
+   * profile built before brand discovery existed has no colours to show, and
+   * no amount of waiting will give it any.
+   *
+   * Refresh runs the whole chain — analysis, then plan, then brand — because
+   * the brand profile is built from the analysis and re-reading one without
+   * the other would leave them describing different commits. Locked fields
+   * still survive it; that is the point of locking them.
+   */
+  async function reread() {
+    setRefreshing(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/analyze`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ refresh: true }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.remedy ?? body.message ?? 'Could not start the re-read');
+
+      /*
+       * Nudge the worker so this starts now rather than at the next heartbeat.
+       * Three times, because the chain is three jobs deep — analysis queues
+       * the plan, which queues the brand — and one drain leaves the next job
+       * sitting there looking like nothing happened.
+       */
+      for (let i = 0; i < 3; i++) {
+        await fetch(`/api/projects/${projectId}/tick`, { method: 'POST' }).catch(() => {});
+      }
+
+      setNote(
+        'Re-reading the repository. This runs analysis, plan and brand in turn and takes a few ' +
+          'minutes — the Pipeline card shows its progress. Anything you have edited here is kept.',
+      );
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -131,14 +193,27 @@ export function BrandIdentityPanel({
         </p>
       )}
 
-      <button
-        type="button"
-        onClick={save}
-        disabled={!dirty || saving}
-        className="mt-5 border border-edge bg-charcoal px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-mist disabled:opacity-40"
-      >
-        {saving ? 'Saving…' : 'Save brand identity'}
-      </button>
+      {note && <p className="mt-4 text-sm text-live">{note}</p>}
+
+      <div className="mt-5 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={save}
+          disabled={!dirty || saving || refreshing}
+          className="border border-edge bg-charcoal px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-mist disabled:opacity-40"
+        >
+          {saving ? 'Saving…' : 'Save brand identity'}
+        </button>
+        <button
+          type="button"
+          onClick={reread}
+          disabled={saving || refreshing}
+          className="border border-edge bg-charcoal px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-dim disabled:opacity-40"
+          title="Reads the repository again and rebuilds the brand from it. Fields you have edited are kept."
+        >
+          {refreshing ? 'Starting…' : 'Re-read the repository'}
+        </button>
+      </div>
     </Panel>
   );
 }
