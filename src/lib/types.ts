@@ -217,23 +217,83 @@ export interface ContentPillar {
   created_at: IsoDate;
 }
 
+/**
+ * Fields a founder may correct by hand.
+ *
+ * Editing one locks it: re-analysis fills gaps and refreshes what it
+ * discovered, but never overwrites a locked field. An override a later
+ * analysis silently reverts is not an override.
+ */
+export const BRAND_EDITABLE_FIELDS = [
+  'brand_name',
+  'primary_color',
+  'secondary_color',
+  'accent_color',
+  'background_color',
+  'text_color',
+  'heading_font',
+  'body_font',
+  'logo_url',
+  'logo_dark_url',
+  'icon_style',
+  'design_language',
+  'imagery_style',
+  'graphic_style',
+  'brand_personality',
+  'visual_style',
+  'voice',
+  'brand_keywords',
+  'visual_dos',
+  'visual_donts',
+  'content_dos',
+  'content_donts',
+] as const;
+export type BrandEditableField = (typeof BRAND_EDITABLE_FIELDS)[number];
+
 export interface BrandProfile {
   id: Uuid;
   project_id: Uuid;
+  brand_name: string;
   voice: string;
   tone_attributes: string[];
   audience: string;
   messaging_pillars: string[];
   terminology: Record<string, string>;
+  /*
+   * Empty means unknown, not "use a default". Nothing here falls back to
+   * FullSend's own palette or type: FullSend is the engine, the project is the
+   * brand, and a renderer that cannot find a brand colour uses a neutral.
+   */
   primary_color: string;
   secondary_color: string;
+  accent_color: string;
   background_color: string;
+  text_color: string;
+  /** Full CSS font stacks, so an unavailable webface degrades to a real one. */
+  heading_font: string;
+  body_font: string;
+  logo_url: string | null;
+  logo_dark_url: string | null;
+  icon_style: string;
+  design_language: string;
+  imagery_style: string;
+  graphic_style: string;
+  brand_personality: string;
   visual_style: string;
   words_to_use: string[];
   words_to_avoid: string[];
+  brand_keywords: string[];
+  visual_dos: string[];
+  visual_donts: string[];
+  content_dos: string[];
+  content_donts: string[];
   positioning: string;
   ctas: string[];
   emoji_policy: 'none' | 'sparing' | 'liberal';
+  /** Where each discovered field was read from, by field name. */
+  identity_sources: Record<string, string>;
+  locked_fields: BrandEditableField[];
+  identity_discovered_at: IsoDate | null;
   updated_at: IsoDate;
 }
 

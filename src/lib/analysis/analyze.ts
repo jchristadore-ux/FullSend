@@ -261,6 +261,14 @@ async function runAnalysis(
       truncated: bundle.signals.truncated,
       homepage: bundle.signals.homepage,
       file_count: bundle.signals.file_count,
+      /*
+       * The product's own visual identity, read from its stylesheets rather
+       * than asked of a model. It rides on the analysis because it is a fact
+       * about this commit: re-reading the same commit would read the same
+       * colours, and the brand build downstream needs them without going back
+       * to GitHub.
+       */
+      brand_identity: bundle.identity,
     },
     // The commit this understanding was derived from. The same commit is never
     // analysed twice; a different one is a new version rather than an edit.

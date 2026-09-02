@@ -36,6 +36,17 @@ export function ContentDetail({
     pillar: string | null;
     persona: string | null;
     timezone: string;
+    /*
+     * Which product this post is for and where it will land.
+     *
+     * One engine drives several products, and the moment before publishing is
+     * the last moment anyone can catch a post pointed at the wrong account.
+     * The guard in publish/guard.ts is what actually stops it; this is so a
+     * person can see it too, without opening a database.
+     */
+    project: string;
+    brand: string | null;
+    destination: string | null;
   };
 }) {
   const router = useRouter();
@@ -122,6 +133,23 @@ export function ContentDetail({
         {context.pillar && <span>· {context.pillar}</span>}
         {context.campaign && <span>· {context.campaign}</span>}
         {item.origin !== 'initial' && <span>· from {item.origin}</span>}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-l-2 border-edge pl-3 font-mono text-[11px] text-dim">
+        <span>
+          Project <span className="text-mist">{context.project}</span>
+        </span>
+        <span>
+          Brand <span className="text-mist">{context.brand ?? 'not configured'}</span>
+        </span>
+        <span>
+          Publishes to{' '}
+          {context.destination ? (
+            <span className="text-live">@{context.destination}</span>
+          ) : (
+            <span className="text-fail">no account connected</span>
+          )}
+        </span>
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,300px)_1fr]">

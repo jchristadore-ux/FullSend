@@ -22,7 +22,7 @@ export default async function ContentDetailPage({
   const project = await db().get(session.scope, 'projects', item.project_id);
   if (!project) redirect('/app');
 
-  const [assets, scheduled, published, campaign, pillar, persona] = await Promise.all([
+  const [assets, scheduled, published, campaign, pillar, persona, brand] = await Promise.all([
     db().find(session.scope, 'creative_assets', {
       where: { project_id: item.project_id, content_item_id: item.id },
     }),
@@ -31,7 +31,22 @@ export default async function ContentDetailPage({
     item.campaign_id ? db().get(session.scope, 'campaigns', item.campaign_id) : null,
     item.pillar_id ? db().get(session.scope, 'content_pillars', item.pillar_id) : null,
     item.persona_id ? db().get(session.scope, 'personas', item.persona_id) : null,
+    db().findOne(session.scope, 'brand_profiles', { where: { project_id: item.project_id } }),
   ]);
+
+  /*
+   * The account this post will actually publish to.
+   *
+   * The scheduled post's own pinned account when it has one — that is binding,
+   * and reconnecting the project later cannot move it. Otherwise the project's
+   * current account, which is what the post would be pinned to on its first
+   * publish attempt.
+   */
+  const destination = scheduled?.social_account_id
+    ? await db().get(session.scope, 'social_accounts', scheduled.social_account_id)
+    : await db().findOne(session.scope, 'social_accounts', {
+        where: { project_id: item.project_id, platform: item.platform },
+      });
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 sm:px-8 sm:py-10">
@@ -57,6 +72,9 @@ export default async function ContentDetailPage({
           pillar: pillar?.name ?? null,
           persona: persona?.name ?? null,
           timezone: project.timezone,
+          project: project.name,
+          brand: brand?.brand_name || (brand ? project.name : null),
+          destination: destination && destination.status !== 'disconnected' ? destination.username : null,
         }}
       />
     </div>
