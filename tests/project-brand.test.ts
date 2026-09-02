@@ -32,6 +32,7 @@ import {
 import { assertPublishable, pinDestination } from '@/lib/publish/guard';
 import { publishScheduledPost } from '@/lib/publish/publish';
 import { hookCard } from '@/lib/creative/render';
+import { runQualityControl } from '@/lib/qc/check';
 import { db } from '@/lib/db/repo';
 import { systemScope } from '@/lib/db';
 import { newId, nowIso } from '@/lib/ids';
@@ -606,5 +607,312 @@ describe('a post can only ever publish to its own project', () => {
     const usernames = targets.map((t) => t.account.username);
     expect(usernames).toEqual(['afterido_official', 'playpal_official', 'flippulse_official']);
     expect(new Set(targets.map((t) => t.account.id)).size).toBe(3);
+  });
+});
+
+/**
+ * Composed content never reaches a feed unseen.
+ *
+ * `generateObject` falls back to the deterministic composer when a provider
+ * call fails, rather than losing the run. For a marketing plan that is the
+ * right trade — it is scaffolding a founder reviews. For content it is not,
+ * and this is how we learned the difference: a provider timeout composed an
+ * AfterIDo carousel reading "Start smaller than you think" / "Automate the
+ * repeat, not the decision" / "Measure one thing", body "Applies directly to
+ * the name-change order." four times over, and autopilot published it to a
+ * real Instagram account.
+ *
+ * Quality control cannot catch that. It looks for false claims and AI slop,
+ * and none of those sentences is either — they are simply empty, and emptiness
+ * is not a property of a sentence you can test for. Provenance is.
+ */
+describe('content composed from templates is held for a human', () => {
+  it('composes generic filler when the provider fails, and says so', async () => {
+    const { DeterministicProvider } = await import('@/lib/ai/deterministic-provider');
+    const provider = new DeterministicProvider();
+
+    const res = await provider.complete({
+      task: 'content.batch',
+      tier: 'standard',
+      system: '',
+      messages: [
+        {
+          role: 'user',
+          content: JSON.stringify({
+            context: {
+              project_name: 'AfterIDo',
+              analysis: { category: 'Life admin app', features: [], screens: [], differentiators: [] },
+              brand: { ctas: ['Get AfterIDo'] },
+              briefs: [
+                { seed: 's', platform: 'instagram', format: 'carousel', pillar_type: 'education', topic: 'the name-change order' },
+              ],
+            },
+          }),
+        },
+      ],
+    } as never);
+
+    const item = JSON.parse(res.text).items[0];
+    // Structurally valid — which is exactly why nothing downstream stopped it.
+    expect(item.slides.length).toBeGreaterThan(0);
+    expect(item.slides.every((s: { headline: string }) => s.headline.length > 0)).toBe(true);
+    // And generic: the same body, repeated, saying nothing about the product.
+    const bodies = item.slides.map((s: { body: string }) => s.body);
+    expect(new Set(bodies).size).toBeLessThan(bodies.length);
+    // The provider names itself, which is what the caller keys the hold on.
+    expect(res.provider).toBe('deterministic');
+  });
+
+  it('flags a live provider failing over to templates, and only that', async () => {
+    const { setProvider, generateObject } = await import('@/lib/ai/client');
+    const { contentBatchSchema } = await import('@/lib/schemas');
+
+    /*
+     * A configured, live provider that returns unusable JSON — the shape of
+     * the failure that published the AfterIDo carousel. `generateObject`
+     * composes rather than losing the run, and must say that it did.
+     */
+    const failing = {
+      name: 'scripted',
+      live: true,
+      modelFor: () => 'scripted-model',
+      async complete() {
+        return {
+          text: '{"nothing":"usable"}',
+          model: 'scripted-model',
+          provider: 'scripted',
+          usage: { inputTokens: 10, outputTokens: 10, cachedInputTokens: 0 },
+          costUsd: 0.001,
+          cacheHit: false,
+        };
+      },
+    };
+
+    setProvider(failing as never);
+    const degradedRun = await generateObject({
+      task: 'content.batch',
+      system: '',
+      brief: 'one post',
+      context: {
+        project_name: 'AfterIDo',
+        analysis: { category: 'app', features: [], screens: [], differentiators: [] },
+        briefs: [{ seed: 's', platform: 'instagram', format: 'static', pillar_type: 'education', topic: 'x' }],
+      },
+      schema: contentBatchSchema,
+      noCache: true,
+    });
+
+    // The flag is the whole mechanism: without it nothing downstream can tell
+    // a composed post from a written one, and autopilot publishes both.
+    expect(degradedRun.degraded).toBe(true);
+    expect(degradedRun.model).toContain('deterministic');
+
+    /*
+     * And the narrower half of the claim. Running deliberately without an API
+     * key puts the install in mock mode: the composer *is* the provider, that
+     * is the operator's choice, and it is not a degradation. Conflating the
+     * two would hold every post on every no-key install, which is what the
+     * first version of this change did.
+     */
+    setProvider(null);
+    const mockRun = await generateObject({
+      task: 'content.batch',
+      system: '',
+      brief: 'one post',
+      context: {
+        project_name: 'AfterIDo',
+        analysis: { category: 'app', features: [], screens: [], differentiators: [] },
+        briefs: [{ seed: 's2', platform: 'instagram', format: 'static', pillar_type: 'education', topic: 'y' }],
+      },
+      schema: contentBatchSchema,
+      noCache: true,
+    });
+    expect(mockRun.degraded).toBe(false);
+  });
+});
+
+/**
+ * The hold itself, through the real generator.
+ *
+ * The flag test above passes whether or not anything acts on the flag — it
+ * only proves `generateObject` reports the degradation. This one goes through
+ * `generateContent` and asserts the post that comes out cannot publish, which
+ * is the property that was actually missing when the AfterIDo carousel went
+ * live.
+ */
+describe('a degraded batch cannot reach a feed', () => {
+  const FAILING_LIVE_PROVIDER = {
+    name: 'scripted',
+    live: true,
+    modelFor: () => 'scripted-model',
+    async complete() {
+      return {
+        text: '{"nothing":"usable"}',
+        model: 'scripted-model',
+        provider: 'scripted',
+        usage: { inputTokens: 10, outputTokens: 10, cachedInputTokens: 0 },
+        costUsd: 0.001,
+        cacheHit: false,
+      };
+    },
+  };
+
+  async function generateOnePost(provider: unknown | null, format: 'carousel' | 'static' = 'carousel') {
+    const ctx = await setupContext();
+    const { setProvider } = await import('@/lib/ai/client');
+    const { generateContent } = await import('@/lib/content/generate');
+    const { analyzeProduct } = await import('@/lib/analysis/analyze');
+    const { buildStrategy, ensureBrandProfile, approveStrategy } = await import('@/lib/strategy/build');
+
+    const project = await createProject(ctx.scope, ctx.user.id, { autopilot_mode: 'full_send' });
+
+    // Build the prerequisites on the composer, which is the normal test path.
+    setProvider(null);
+    const analyzed = await analyzeProduct(ctx.scope, project, 'acme/taskflow', {
+      client: fakeGitHubClient(),
+    });
+    const built = await buildStrategy(ctx.scope, project, analyzed.analysis);
+    const { brand } = await ensureBrandProfile(ctx.scope, project, analyzed.analysis, built.strategy);
+    const strategy = await approveStrategy(ctx.scope, built.strategy.id);
+
+    // Only now install the provider under test, so the failure lands on the
+    // content call rather than on the setup.
+    setProvider(provider as never);
+    const result = await generateContent(ctx.scope, {
+      project,
+      analysis: analyzed.analysis,
+      brand,
+      strategy,
+      personas: [],
+      pillars: built.pillars,
+      campaigns: built.campaigns,
+      slots: [
+        {
+          platform: 'instagram' as const,
+          format,
+          pillarType: 'education' as const,
+          at: new Date(Date.now() + 86_400_000),
+        },
+      ],
+    });
+    setProvider(null);
+    return { ctx, result };
+  }
+
+  it('holds the post for review instead of approving it', async () => {
+    const { result } = await generateOnePost(FAILING_LIVE_PROVIDER);
+
+    expect(result.created).toHaveLength(1);
+    const post = result.created[0];
+    // Full send mode would otherwise have approved this and scheduled it.
+    expect(post.status).toBe('review_required');
+    expect(post.status).not.toBe('approved');
+  });
+
+  it('tells the founder why, rather than leaving it to be discovered', async () => {
+    const { ctx, result } = await generateOnePost(FAILING_LIVE_PROVIDER);
+    expect(result.created.length).toBeGreaterThan(0);
+
+    const notifications = await db().find(ctx.scope, 'notifications', {
+      where: { user_id: ctx.user.id },
+    });
+    const held = notifications.find((n) => n.title.includes('rewriting'));
+    expect(held).toBeTruthy();
+    expect(held!.body).toContain('provider failed');
+  });
+
+  it('leaves a deliberate no-key install publishing as before', async () => {
+    /*
+     * Mock mode is a choice, not a degradation. Holding here would stop every
+     * no-key install dead, which is what the first version of this did.
+     *
+     * A static post rather than a carousel, deliberately: the composer's
+     * carousels repeat their slide bodies and are now blocked by quality
+     * control on their own merits, which is correct and a separate gate. What
+     * this asserts is only that the `degraded` hold does not fire in mock mode.
+     */
+    const { result } = await generateOnePost(null, 'static');
+    expect(result.created.length).toBeGreaterThan(0);
+    expect(result.created.some((c) => c.status === 'approved')).toBe(true);
+  });
+});
+
+/**
+ * The gate that catches what already exists.
+ *
+ * Holding newly generated content fixes the future. It does nothing about
+ * posts already sitting at `scheduled` from before the fix — and those publish
+ * on their own. Quality control re-runs at publish time, so a rule here
+ * catches them without touching a single row.
+ *
+ * Every other check reads the hook, the caption and the CTA. Nothing read
+ * inside the slides, which is how a carousel passed every check while its
+ * slides said nothing.
+ */
+describe('quality control reads inside a carousel', () => {
+  function carousel(slides: { headline: string; body: string }[]) {
+    return {
+      platform: 'instagram' as const,
+      format: 'carousel' as const,
+      hook: 'You are doing the name-change order the hard way',
+      caption: 'A short caption that is otherwise perfectly fine.',
+      cta: 'Get AfterIDo',
+      hashtags: ['#namechange'],
+      video_plan: null,
+      slides,
+    };
+  }
+
+  it('blocks the carousel that actually published', () => {
+    // Reproduced from the composer, verbatim.
+    const qc = runQualityControl({
+      item: carousel([
+        { headline: '5 things about the name-change order', body: 'Swipe →' },
+        { headline: '1. Start smaller than you think', body: 'Applies directly to the name-change order.' },
+        { headline: '2. Automate the repeat, not the decision', body: 'Applies directly to the name-change order.' },
+        { headline: '3. Measure one thing', body: 'Applies directly to the name-change order.' },
+        { headline: '4. Ship before it feels ready', body: 'Applies directly to the name-change order.' },
+        { headline: "That's it.", body: 'AfterIDo does all of this for you.' },
+      ]),
+      analysis: null,
+      brand: null,
+    });
+
+    expect(qc.passed).toBe(false);
+    const finding = qc.findings.find((f) => f.check === 'repetitive' && f.severity === 'block');
+    expect(finding).toBeTruthy();
+    expect(finding!.message).toContain('repeats itself');
+  });
+
+  it('leaves a carousel that says six different things alone', () => {
+    const qc = runQualityControl({
+      item: carousel([
+        { headline: 'Start with the SSA', body: 'Every other agency checks this record first.' },
+        { headline: 'Then the DMV', body: 'They want the updated Social Security record, not the licence.' },
+        { headline: 'Passport next', body: 'It takes the longest, so start it before you need it.' },
+        { headline: 'Then the banks', body: 'Most will do it in-branch with the new licence.' },
+        { headline: 'Employer and payroll', body: 'This one changes your W-2, so it is not optional.' },
+        { headline: 'AfterIDo tracks all of it', body: 'In the order that actually works.' },
+      ]),
+      analysis: null,
+      brand: null,
+    });
+
+    expect(qc.findings.some((f) => f.check === 'repetitive')).toBe(false);
+  });
+
+  it('does not punish a short carousel for echoing one line', () => {
+    // Two slides sharing a call to action is a style, not a failure.
+    const qc = runQualityControl({
+      item: carousel([
+        { headline: 'The order matters', body: 'Start with the SSA.' },
+        { headline: 'Get it right once', body: 'Get AfterIDo.' },
+        { headline: 'Stop re-doing trips', body: 'Get AfterIDo.' },
+      ]),
+      analysis: null,
+      brand: null,
+    });
+    // 3 slides, 2 distinct: 2*2 = 4 > 3, so it passes.
+    expect(qc.findings.some((f) => f.check === 'repetitive')).toBe(false);
   });
 });

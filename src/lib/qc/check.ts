@@ -250,6 +250,42 @@ export function runQualityControl(input: QcInput): QcResult {
     });
   }
 
+  /*
+   * A carousel that repeats itself.
+   *
+   * Every other check here reads the hook, the caption and the CTA. Nothing
+   * read inside the slides, so a carousel could pass every check while its
+   * slides said nothing — which is exactly what published: five slides whose
+   * bodies were all the single sentence "Applies directly to the name-change
+   * order.", under headlines of generic advice. Legible, on-brand, structurally
+   * perfect, and worth nothing to a reader.
+   *
+   * The test is repetition rather than emptiness, because emptiness is not
+   * something you can test a sentence for and repetition is. A carousel exists
+   * to say several things; one that says the same thing on half its slides has
+   * failed at the only job the format has. No post a person would want
+   * published trips this.
+   */
+  if (item.format === 'carousel' && item.slides && item.slides.length >= 3) {
+    const bodies = item.slides
+      .map((s) => s.body.trim().toLowerCase())
+      .filter((b) => b.length > 0);
+    const distinct = new Set(bodies).size;
+    // Half or fewer of the slides saying anything different is not a stylistic
+    // choice; the threshold is deliberately generous so a repeated call to
+    // action or a two-slide echo passes.
+    if (bodies.length >= 3 && distinct * 2 <= bodies.length) {
+      findings.push({
+        check: 'repetitive',
+        severity: 'block',
+        message:
+          `${bodies.length} slides share only ${distinct} distinct ${distinct === 1 ? 'body' : 'bodies'}. ` +
+          'A carousel that repeats itself has nothing to say.',
+        excerpt: bodies[0].slice(0, 120),
+      });
+    }
+  }
+
   /* Brand consistency. */
   if (brand) {
     const banned = brand.words_to_avoid.filter((w) =>

@@ -1,7 +1,7 @@
 import 'server-only';
 import { generateObject } from '../ai/client';
 import { type TenantScope } from '../db';
-import { db, getSettings, listContent } from '../db/repo';
+import { db, getSettings, listContent, notify } from '../db/repo';
 import { newId, nowIso } from '../ids';
 import { logger } from '../logger';
 import { contentBatchSchema } from '../schemas';
@@ -96,7 +96,7 @@ export async function generateContent(scope: TenantScope, input: GenerateContent
   const batch = slots.slice(0, CONTENT_BATCH_SIZE);
   const remainingSlots = Math.max(0, slots.length - batch.length);
   const briefs = batch.map((slot, i) => { const pillar = pickPillar(pillars, slot.pillarType); const campaign = pickCampaign(campaigns, slot.at); const persona = personas[i % Math.max(1, personas.length)]; return { seed: `${project.id}:${slot.at.toISOString()}:instagram`, platform: 'instagram', format: slot.format, pillar_type: slot.pillarType, pillar_name: pillar?.name ?? slot.pillarType, campaign: campaign?.name ?? null, campaign_angle: campaign?.angle ?? null, persona: persona?.name ?? null, topic: pickTopic(pillar, analysis, i), scheduled_for: slot.at.toISOString() }; });
-  const { data, costUsd: batchCost } = await generateObject({
+  const { data, costUsd: batchCost, degraded } = await generateObject({
     task: 'content.batch', system: CONTENT_SYSTEM, brief: input.brief ?? `Write ${briefs.length} Instagram posts for ${project.name}. Each must be publishable as-is.`,
     context: { project_name: project.name, analysis: { one_liner: analysis.one_liner, what_it_does: analysis.what_it_does, category: analysis.category, features: analysis.features, not_capabilities: analysis.not_capabilities, differentiators: analysis.differentiators, problem_solved: analysis.problem_solved, tech_stack: analysis.tech_stack, screens: analysis.screens }, brand: { voice: brand.voice, tone_attributes: brand.tone_attributes, messaging_pillars: brand.messaging_pillars, words_to_use: brand.words_to_use, words_to_avoid: brand.words_to_avoid, ctas: brand.ctas, emoji_policy: brand.emoji_policy, terminology: brand.terminology }, strategy: { positioning: strategy.positioning, value_proposition: strategy.value_proposition, cta_strategy: strategy.cta_strategy }, personas: personas.map((p) => ({ name: p.name, role: p.role, pain_points: p.pain_points, objections: p.objections, tone_preference: p.tone_preference })), existing_hooks: existing.slice(-40).map((c) => c.hook), briefs },
     schema: contentBatchSchema, noCache: true, maxTokens: contentMaxTokens(batch.length), attribution: { scope, projectId: project.id, userId: project.user_id },
@@ -108,13 +108,62 @@ export async function generateContent(scope: TenantScope, input: GenerateContent
     const pillar = pickPillar(pillars, slot.pillarType); const campaign = pickCampaign(campaigns, slot.at); const persona = personas[i % Math.max(1, personas.length)];
     const videoPlan = generated.video_plan ?? (needsVideo(slot.format) ? buildVideoPackage({ hook: generated.hook, caption: generated.caption, cta: generated.cta, analysis, platform: 'instagram' }) : null);
     const qc = runQualityControl({ item: { platform: 'instagram', format: slot.format, hook: generated.hook, caption: generated.caption, cta: generated.cta, hashtags: generated.hashtags, video_plan: videoPlan, slides: generated.slides }, analysis, brand, recent });
-    const decision = canAutoPublish(qc, project.autopilot_mode, slot.pillarType, settings?.require_approval_for_promotion ?? true); const status: ContentItem['status'] = !qc.passed ? 'review_required' : decision.allowed ? 'approved' : 'approval_required'; if (!qc.passed) blockedByQc++;
+    /*
+     * Degraded content is never published unseen.
+     *
+     * When a *live* provider fails, `generateObject` falls back to the
+     * deterministic composer rather than losing the run. For a marketing plan
+     * or a brand profile that is the right trade: those are internal artefacts
+     * a founder reviews before anything acts on them, and scaffolding beats a
+     * dead pipeline.
+     *
+     * For content it is the wrong trade, and this is how we found out. A
+     * provider timeout composed an AfterIDo carousel whose slides read "Start
+     * smaller than you think", "Automate the repeat, not the decision",
+     * "Measure one thing" — generic advice with nothing to do with a
+     * name-change app — under a body of "Applies directly to the name-change
+     * order." repeated four times. It was structurally valid, so it passed
+     * every check, and autopilot published it to a real Instagram account.
+     * Nobody can un-publish that.
+     *
+     * The composer cannot do better here and is not supposed to: it has
+     * templates and a feature list, not the ability to write. So a post
+     * produced this way is held for a human regardless of autopilot mode.
+     * Note this keys on `degraded`, not on "was composed": an install running
+     * deliberately without an API key is in mock mode by choice and behaves as
+     * before. This is specifically the case where a founder paid for a model
+     * and silently got templates. Quality control cannot
+     * catch this on its own — it looks for false claims and AI slop, and
+     * "Measure one thing" is neither. It is simply empty, and empty is not a
+     * property of a sentence you can test for. Where it came from is.
+     */
+    const decision = canAutoPublish(qc, project.autopilot_mode, slot.pillarType, settings?.require_approval_for_promotion ?? true); const status: ContentItem['status'] = !qc.passed ? 'review_required' : degraded ? 'review_required' : decision.allowed ? 'approved' : 'approval_required'; if (!qc.passed) blockedByQc++;
     const item: ContentItem = { id: newId(), project_id: project.id, campaign_id: campaign?.id ?? null, pillar_id: pillar?.id ?? null, persona_id: persona?.id ?? null, platform: 'instagram', format: slot.format, hook: generated.hook, script: generated.script, caption: generated.caption, cta: generated.cta, hashtags: generated.hashtags, video_plan: videoPlan, slides: generated.slides, creative_asset_ids: [], status, dedup_hash: contentFingerprint(candidate), qc, scheduled_for: slot.at.toISOString(), published_at: null, origin: input.origin ?? 'initial', ai_cost_usd: Math.round((batchCost / Math.max(1, batch.length)) * 1e6) / 1e6, created_at: nowIso(), updated_at: nowIso() };
     const saved = await db().insert(scope, 'content_items', item); const assets = await renderCreative(scope, { project, item: saved, brand, analysis });
     if (assets.length) { await db().update(scope, 'content_items', saved.id, { creative_asset_ids: assets.map((a) => a.id) }); saved.creative_asset_ids = assets.map((a) => a.id); }
     created.push(saved); seen.push({ id: saved.id, platform: saved.platform, hook: saved.hook, caption: saved.caption, dedup_hash: saved.dedup_hash }); recent.push({ hook: saved.hook, caption: saved.caption });
   }
-  log.info('content generated', { project: project.id, created: created.length, duplicates: rejectedDuplicates, qcBlocked: blockedByQc, cost: costUsd }); return { created, rejectedDuplicates, blockedByQc, costUsd, remainingSlots };
+  /*
+   * Say it out loud. A held post that nobody is told about is a post that sits
+   * there while the founder wonders why the calendar stopped filling — and the
+   * reason it is held is not something they could deduce by reading it.
+   */
+  if (degraded && created.length) {
+    await notify(scope, {
+      user_id: project.user_id,
+      project_id: project.id,
+      severity: 'warning',
+      title: `${created.length} post${created.length === 1 ? '' : 's'} need${created.length === 1 ? 's' : ''} rewriting`,
+      body:
+        'The AI provider failed, so FullSend composed these from templates rather than losing the ' +
+        'run. They are generic by construction and will not read as your product, so they are ' +
+        'held rather than published. Rewrite or delete them, or regenerate once the provider is back.',
+      action_label: 'Review them',
+      action_href: '/app/content?status=review_required',
+    });
+  }
+
+  log.info('content generated', { project: project.id, created: created.length, duplicates: rejectedDuplicates, qcBlocked: blockedByQc, degraded, cost: costUsd }); return { created, rejectedDuplicates, blockedByQc, costUsd, remainingSlots };
 }
 function needsVideo(format: string): boolean { return format === 'reel' || format === 'short_video' || format === 'story'; }
 function pickPillar(pillars: ContentPillar[], type: PillarType): ContentPillar | null { return pillars.filter((p) => p.type === type)[0] ?? pillars[0] ?? null; }

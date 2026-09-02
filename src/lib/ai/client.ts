@@ -68,7 +68,29 @@ export interface GenerateOptions<T> {
   maxTokens?: number; noCache?: boolean;
   attribution?: { scope: TenantScope; projectId?: Uuid | null; userId?: Uuid | null; campaignId?: Uuid | null; contentItemId?: Uuid | null };
 }
-export interface GenerateResult<T> { data: T; costUsd: number; model: string; cacheHit: boolean; }
+export interface GenerateResult<T> {
+  data: T;
+  costUsd: number;
+  model: string;
+  cacheHit: boolean;
+  /**
+   * True when a live provider was configured, failed, and the deterministic
+   * composer stood in for it.
+   *
+   * Deliberately narrower than "was composed". Running with no API key at all
+   * puts the whole install in `mock` mode: the composer *is* the provider,
+   * templates are the expected output, and the operator chose that. This flag
+   * means something different and worse — the founder configured a real model,
+   * paid for it, and silently got templates instead, with nothing on screen
+   * saying so.
+   *
+   * Callers need to know because the right response is not the same for every
+   * stage. A composed marketing plan is scaffolding a founder reviews before
+   * anything acts on it. A composed post goes to a public feed under their
+   * name and cannot be taken back.
+   */
+  degraded: boolean;
+}
 
 export async function generateObject<T>(opts: GenerateOptions<T>): Promise<GenerateResult<T>> {
   const startedAt = Date.now();
@@ -97,7 +119,7 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
     const hit = readCache(key);
     if (hit) {
       const parsed = tryParse(hit.text, opts.schema, validationSchema);
-      if (parsed.ok) { await ledger(opts, hit, tier); return { data: parsed.value, costUsd: 0, model: hit.model, cacheHit: true }; }
+      if (parsed.ok) { await ledger(opts, hit, tier); return { data: parsed.value, costUsd: 0, model: hit.model, cacheHit: true, degraded: false }; }
     }
   }
 
@@ -122,7 +144,7 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
       if (parsed.ok) {
         if (isCacheable(req)) writeCache(key, repaired);
         await ledger(opts, { ...repaired, costUsd: totalCost }, tier);
-        return { data: parsed.value, costUsd: totalCost, model: repaired.model, cacheHit: false };
+        return { data: parsed.value, costUsd: totalCost, model: repaired.model, cacheHit: false, degraded: false };
       }
     }
 
@@ -160,7 +182,7 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
       await ledger(opts, { ...composed.response, costUsd: totalCost }, tier);
       // Deliberately not cached: the cache key belongs to the live model's
       // request, and a composed answer must not be served as that model's.
-      return { data: composed.value as T, costUsd: totalCost, model: composed.response.model, cacheHit: false };
+      return { data: composed.value as T, costUsd: totalCost, model: composed.response.model, cacheHit: false, degraded: true };
     }
 
     throw new FullSendError('ai_invalid_output', `AI returned unusable output: ${parsed.error}`, {
@@ -169,7 +191,7 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
   }
   if (isCacheable(req)) writeCache(key, response);
   await ledger(opts, { ...response, costUsd: totalCost }, tier);
-  return { data: parsed.value, costUsd: totalCost, model: response.model, cacheHit: false };
+  return { data: parsed.value, costUsd: totalCost, model: response.model, cacheHit: false, degraded: false };
 }
 
 /**
