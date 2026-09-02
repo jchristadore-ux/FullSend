@@ -93,24 +93,48 @@ jobs:
             exit 1
           fi
 
+          # See the note on `base` in the ping job below: an origin Vercel
+          # redirects answers 308, which curl reports as a perfectly
+          # successful request unless the status is checked by hand.
+          base="${URL%/}"
           echo "── the deployment FULLSEND_URL resolves to"
-          health=$(curl --silent --show-error --max-time 30 "$URL/api/health" || echo '{}')
-          echo "appUrl:   $(printf '%s' "$health" | jq -r '.appUrl // "unreachable"')"
-          echo "database: $(printf '%s' "$health" | jq -r '.database // "unknown"')"
-          echo "queue:    $(printf '%s' "$health" | jq -c '.queue // "not reported"')"
+          landed=$(curl --silent --show-error --location --max-time 30 \
+                        --output /tmp/health.json --write-out '%{url_effective}' \
+                        "$base/api/health" || echo '')
+          case "$landed" in
+            */api/health)
+              if [ "${landed%/api/health}" != "$base" ]; then
+                # Not fatal — the sweep resolves it the same way and works
+                # regardless — but it is the fault that stalled the queue for
+                # days, so it gets said out loud with the value to paste.
+                echo "::warning::FULLSEND_URL redirects. The heartbeat follows it, but set the secret to ${landed%/api/health} to stop paying for a redirect on every call."
+              fi
+              base="${landed%/api/health}"
+              ;;
+          esac
+          echo "base:     $base"
+          echo "appUrl:   $(jq -r '.appUrl // "unreachable"' /tmp/health.json 2>/dev/null)"
+          echo "database: $(jq -r '.database // "unknown"' /tmp/health.json 2>/dev/null)"
+          echo "queue:    $(jq -c '.queue // "not reported"' /tmp/health.json 2>/dev/null)"
 
           echo
           echo "── whether the cron secret is accepted there"
+          # No --location here, deliberately. The request carries the cron
+          # secret, and a redirect is exactly the thing you do not follow with
+          # a credential attached. `base` is already the canonical origin, so
+          # a redirect at this point is a fault worth reporting rather than
+          # something to chase.
           code=$(curl --silent --output /tmp/cron.json --write-out '%{http_code}' \
                       --max-time 60 -H "Authorization: Bearer $SECRET" \
-                      "$URL/api/cron/queue" || echo 000)
-          echo "POST /api/cron/queue -> HTTP $code"
-          echo "response: $(cat /tmp/cron.json 2>/dev/null | head -c 500)"
+                      "$base/api/cron/queue" || echo 000)
+          echo "GET /api/cron/queue -> HTTP $code"
+          echo "response: $(head -c 500 /tmp/cron.json 2>/dev/null)"
 
           case "$code" in
             200) echo "The heartbeat reaches this deployment and its secret is accepted." ;;
             401) echo "::error::FULLSEND_CRON_SECRET does not match CRON_SECRET on the deployment at FULLSEND_URL." ; exit 1 ;;
             000) echo "::error::FULLSEND_URL is unreachable." ; exit 1 ;;
+            30*) echo "::error::The cron endpoint redirected ($code). Set FULLSEND_URL to the exact origin the deployment reports as appUrl above — no trailing slash, https, no www unless that is the canonical host." ; exit 1 ;;
             *)   echo "::error::Unexpected status $code from the cron endpoint." ; exit 1 ;;
           esac
 
@@ -150,16 +174,73 @@ jobs:
             exit 1
           fi
 
+          # ── Where to send the heartbeat ──────────────────────────────────
+          #
+          # This heartbeat ran for days without a single failed poll while the
+          # queue did not move, and this is why: FULLSEND_URL answers 308.
+          # curl does not follow a redirect unless told to, and a 308 is not an
+          # error — not even to --fail-with-body, which fails on 4xx and 5xx
+          # and waves a 3xx through. So every call returned exit 0 with a body
+          # of "Redirecting...", `.processed` parsed as 0, and the sweep
+          # concluded the queue was idle. A misconfiguration was wearing the
+          # exact costume of a healthy system, which is why four fixes aimed at
+          # the queue itself all missed: the queue was never being asked.
+          #
+          # Vercel answers 308 for any origin that is not the canonical one —
+          # http:// rather than https, a www/apex mismatch, a deployment alias
+          # pointing at the production domain — and there is nothing anywhere
+          # that tells you the URL you saved was one of those.
+          #
+          # So the origin is resolved before anything is sent: follow the
+          # redirects on the *public* health endpoint and keep whatever origin
+          # they land on. The authenticated calls below then address an origin
+          # already known to be canonical, and no redirect is ever followed
+          # with the secret attached — `--location-trusted`, which would hand
+          # the header to whatever host a redirect names, appears nowhere.
+          #
+          # Verified against a stub that 308s to a second origin, reproducing
+          # the production log line for line: the old form polls "processed=0"
+          # forever and never fails, `--location` alone gets a 401 because curl
+          # drops the credential across hosts, and this form drains the queue.
+          #
+          # The trailing slash is stripped first. curl collapses the resulting
+          # doubled slash on its own, so it is not the fault here — but it
+          # would otherwise make an origin look like it redirects when the only
+          # thing that changed was the spelling.
+          base="${URL%/}"
+          landed=$(curl --silent --show-error --location --max-time 30 \
+                        --output /dev/null --write-out '%{url_effective}' \
+                        "$base/api/health" || echo '')
+          case "$landed" in
+            */api/health)
+              if [ "${landed%/api/health}" != "$base" ]; then
+                echo "::warning::FULLSEND_URL redirects; using the canonical origin it lands on instead."
+              fi
+              base="${landed%/api/health}"
+              ;;
+          esac
+
           # The response body goes to stdout so a caller can read it; anything
           # meant for a human goes to stderr, which keeps `$(call queue)` clean
           # enough to hand to jq.
+          #
+          # Status is checked explicitly rather than left to --fail-with-body,
+          # which fails on 4xx and 5xx but waves a 3xx through. Only 200 is
+          # this endpoint doing its job; everything else is a failure and says
+          # so, which is the guarantee that a silent no-op cannot come back.
           call() {
             echo "── $1" >&2
-            # --fail-with-body so a non-2xx surfaces the API's own explanation.
-            curl --silent --show-error --fail-with-body \
-                 --max-time 300 --retry 2 --retry-delay 10 \
-                 -H "Authorization: Bearer $SECRET" \
-                 "$URL/api/cron/$1"
+            code=$(curl --silent --show-error \
+                        --max-time 300 --retry 2 --retry-delay 10 \
+                        -H "Authorization: Bearer $SECRET" \
+                        --output /tmp/cron-body --write-out '%{http_code}' \
+                        "$base/api/cron/$1" || echo 000)
+            cat /tmp/cron-body 2>/dev/null
+            if [ "$code" != "200" ]; then
+              echo >&2
+              echo "::error::/api/cron/$1 returned HTTP $code" >&2
+              return 1
+            fi
           }
 
           failed=0
@@ -205,10 +286,13 @@ jobs:
             # one line that matters. Only passes that did something are worth
             # a line in the log.
             sweep() {
-              curl --silent --show-error --fail-with-body \
-                   --max-time 300 --retry 2 --retry-delay 10 \
-                   -H "Authorization: Bearer $SECRET" \
-                   "$URL/api/cron/queue"
+              code=$(curl --silent --show-error \
+                          --max-time 300 --retry 2 --retry-delay 10 \
+                          -H "Authorization: Bearer $SECRET" \
+                          --output /tmp/sweep-body --write-out '%{http_code}' \
+                          "$base/api/cron/queue" || echo 000)
+              cat /tmp/sweep-body 2>/dev/null
+              [ "$code" = "200" ]
             }
 
             while [ "$(date +%s)" -lt "$deadline" ]; do

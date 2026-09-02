@@ -116,6 +116,8 @@ Authorization: Bearer <CRON_SECRET>
 
 Every five minutes is a sensible interval; each call is a bounded worker pass and returns as soon as it has done its allowance. Free services that do this include cron-job.org, Cronitor and UptimeRobot. On Vercel Pro you can use native crons in `vercel.json` instead — disable the Actions workflow if you do, so the jobs are not driven twice.
 
+**Whatever drives it, treat anything other than HTTP 200 as a failure — a redirect especially.** Vercel answers `308` for any origin that is not the canonical one: `http://` rather than `https`, a www/apex mismatch, a deployment alias pointing at the production domain. Most HTTP clients neither follow a redirect by default nor call it an error, so a wrong URL returns a success with a body of `Redirecting...` and the queue silently never runs. This is not hypothetical: it stalled this deployment for days, wearing the exact costume of a healthy system. Point the scheduler at the origin the deployment reports as `appUrl` on `/api/health`, and alert on the status code rather than on the request failing.
+
 ## Security
 
 - Social access tokens are encrypted at rest.
