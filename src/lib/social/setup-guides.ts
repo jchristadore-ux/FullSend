@@ -58,7 +58,8 @@ export const INSTAGRAM_SETUP: SetupGuide = {
   title: 'Connect Instagram',
   summary:
     'Meta requires one developer setup for the FullSend application — once, ever. After that, ' +
-    'every Instagram account you connect is two clicks, however many brands you run.',
+    'connecting an account you own is two clicks, however many brands you run. Only letting ' +
+    'other people connect their own accounts needs Meta’s App Review.',
   outcome:
     'FullSend publishes Reels, carousels, feed posts and Stories to your Instagram Business ' +
     'account automatically, and reads back reach, likes, comments, shares and saves.',
@@ -67,11 +68,15 @@ export const INSTAGRAM_SETUP: SetupGuide = {
     'No Facebook Page required on the default setup. FullSend uses Instagram Login, which ' +
       'connects to the account directly.',
     'Instagram caps API publishing at 100 posts per rolling 24 hours.',
-    'Meta App Review typically takes 2–4 weeks for the publishing permission. It is requested ' +
-      'once for the application, not once per Instagram account.',
-    'While the Meta app is in Development Mode, only people holding a role on the app can ' +
-      'authorize it. That is why a second account is refused — take the app Live and the ' +
-      'refusal goes away for every account at once.',
+    'A Meta app in Development Mode only lets accounts with a role on it authorize. That is why ' +
+      'the first account connects and the second is refused with "insufficient developer role" — ' +
+      'it is the app’s state, never a problem with the account.',
+    'Accounts you own: name each one an Instagram tester on the app and connect it. Two minutes ' +
+      'per account, no review, and it is Meta’s supported path for an app that serves its own ' +
+      'operator. This is what running several of your own brands looks like.',
+    'Accounts other people own: that needs Advanced Access through Meta App Review, and Meta ' +
+      'gates it behind Business Verification — a registered business, its tax id and documents. ' +
+      'Do not start that track to connect an account you already control.',
   ],
   appSetup: [
     {
@@ -117,15 +122,17 @@ export const INSTAGRAM_SETUP: SetupGuide = {
       verifiable: false,
     },
     {
-      title: 'Switch the app from Development to Live',
+      title: 'Only if other people will connect their own accounts: App Review, then Live',
       detail:
-        'At the top of the Meta app dashboard there is an App Mode toggle reading Development. ' +
-        'Switch it to Live. This is the step that makes FullSend a multi-account product: in ' +
-        'Development Mode Meta only lets people with a role on the app authorize it, so the ' +
-        'first account works and every account after it is refused with "insufficient developer ' +
-        'role". Live, any Instagram Business account can connect by pressing Connect. Adding ' +
-        'each new account as an app tester is a workaround for this toggle, not a setup step.',
+        'Skip this while every Instagram account is one you own — name those as testers instead ' +
+        '(see below) and FullSend works today. This step is for opening FullSend to accounts you ' +
+        'do not control. App Review → Permissions and Features → request Advanced Access for the ' +
+        'three permissions above, then switch the App Mode toggle at the top of the dashboard ' +
+        'from Development to Live. Meta gates Advanced Access behind Business Verification, so ' +
+        'expect it to ask for a registered business, its tax id and supporting documents, and ' +
+        'expect the review itself to take a few weeks.',
       href: 'https://developers.facebook.com/docs/development/release',
+      waitTime: '2–4 weeks',
       verifiable: false,
     },
   ],
@@ -137,6 +144,16 @@ export const INSTAGRAM_SETUP: SetupGuide = {
         'Switch to professional account → Business. A Creator account will not work — Meta ' +
         'restricts content publishing to Business accounts.',
       verifiable: true,
+    },
+    {
+      title: 'While the app is in Development Mode, name the account a tester',
+      detail:
+        'Meta app dashboard → App roles → Roles → Add people → Instagram tester → the account’s ' +
+        'username. Then accept it as that account: instagram.com → Settings → Apps and websites ' +
+        '→ Tester invites → Accept. Two minutes, and only until the app is Live. Skip it once ' +
+        'it is.',
+      href: 'https://developers.facebook.com/apps',
+      verifiable: false,
     },
     {
       title: 'Press Connect Instagram',

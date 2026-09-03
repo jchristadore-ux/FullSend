@@ -372,25 +372,43 @@ describe('the setup guide separates the application from the account', () => {
   it('puts the developer work in the one-time list', () => {
     const titles = INSTAGRAM_SETUP.appSetup.map((s) => s.title.toLowerCase());
     expect(titles.some((t) => t.includes('meta app'))).toBe(true);
-    expect(titles.some((t) => t.includes('development to live'))).toBe(true);
+    expect(titles.some((t) => t.includes('app review'))).toBe(true);
   });
 
-  it('asks a new account for nothing but a Business account and a click', () => {
-    expect(INSTAGRAM_SETUP.perAccount).toHaveLength(2);
+  it('does not send someone to App Review to connect an account they own', () => {
+    /*
+     * The step that opens the app to *other people's* accounts is the one that
+     * drags in Advanced Access and Meta's Business Verification — a registered
+     * business, a tax id, documents. Somebody connecting their own second brand
+     * must be able to tell at a glance that none of that applies to them, or
+     * they end up on a verification form for no reason.
+     */
+    const live = INSTAGRAM_SETUP.appSetup.find((s) => s.title.toLowerCase().includes('app review'));
+    expect(live).toBeDefined();
+    expect(live!.detail).toContain('Skip this while every Instagram account is one you own');
+    expect(live!.detail).toContain('Business Verification');
+  });
+
+  it('asks a new account for a Business account, a tester invite and a click', () => {
+    expect(INSTAGRAM_SETUP.perAccount).toHaveLength(3);
     const detail = INSTAGRAM_SETUP.perAccount.map((s) => s.detail).join(' ');
     expect(detail).toContain('Business');
     expect(detail).toContain('Connect Instagram');
-    // No developer console and no App Review per account — and it says so
-    // about the merge step people were told to perform.
-    expect(detail.toLowerCase()).not.toContain('developers.facebook.com');
+    // The tester invite is the whole of it while the app is in Development
+    // Mode — no App Review, and no merge step people were told to perform.
+    expect(detail).toContain('Instagram tester');
     expect(detail.toLowerCase()).not.toContain('app review');
     expect(detail.toLowerCase()).toContain('no merge step');
   });
 
-  it('explains why the second account was refused', () => {
+  it('explains why the second account was refused, and which track fixes it', () => {
     const caveats = INSTAGRAM_SETUP.caveats.join(' ');
     expect(caveats).toContain('Development Mode');
-    expect(caveats).toContain('every account at once');
+    expect(caveats).toContain('insufficient developer role');
+    // Both tracks named, so nobody picks the heavy one by accident.
+    expect(caveats).toContain('Accounts you own');
+    expect(caveats).toContain('Accounts other people own');
+    expect(caveats).toContain('Business Verification');
   });
 
   it('is the guide the accounts page reads', () => {
