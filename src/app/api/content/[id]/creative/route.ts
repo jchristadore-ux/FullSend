@@ -1,6 +1,6 @@
 import { route } from '@/lib/api/handler';
 import { audit, db } from '@/lib/db/repo';
-import { notFound } from '@/lib/errors';
+import { FullSendError, notFound } from '@/lib/errors';
 import { regenerateCreative } from '@/lib/creative/pipeline';
 import { LIMITS } from '@/lib/rate-limit';
 
@@ -21,6 +21,23 @@ export const POST = route(
   async ({ session, params }) => {
     const item = await db().get(session.scope, 'content_items', params.id);
     if (!item) throw notFound('Content');
+
+    /*
+     * A published post keeps the creative it published with.
+     *
+     * Regenerating replaces the assets, and for a post that is already on
+     * Instagram those rows are the only record of what actually went out.
+     * Nothing on the platform changes either way, so this would trade a real
+     * receipt for a picture nobody will see.
+     */
+    if (item.status === 'published') {
+      throw new FullSendError('already_published', 'This post has already gone out', {
+        status: 409,
+        remedy:
+          'Its creative is the record of what was published. Generate a new post if you want a ' +
+          'different image on the feed.',
+      });
+    }
 
     const outcome = await regenerateCreative(session.scope, item.id);
 

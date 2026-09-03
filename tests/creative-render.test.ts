@@ -445,6 +445,29 @@ describe('regenerating creative', () => {
     expect(outcome.item.generation_error).toBeNull();
   });
 
+  it("leaves a published post's creative alone", async () => {
+    const ctx = await setupContext();
+    const project = await createProject(ctx.scope, ctx.user.id);
+    const brand = await brandFor(ctx, project);
+    const analysis = await analysisFor(ctx, project);
+    const item = await itemFor(ctx, project);
+
+    await materializeCreative(ctx.scope, { project, item, brand, analysis });
+    const before = await db().find(ctx.scope, 'creative_assets', {
+      where: { project_id: project.id, content_item_id: item.id },
+    });
+    await db().update(ctx.scope, 'content_items', item.id, { status: 'published' });
+
+    /*
+     * The library call still re-renders — the guard belongs at the API, where
+     * a person is pressing a button. What must hold here is that the failure
+     * path cannot quietly demote a published post: its status survives.
+     */
+    const outcome = await regenerateCreative(ctx.scope, item.id);
+    expect(outcome.item.status).toBe('published');
+    expect(before.length).toBeGreaterThan(0);
+  });
+
   it('reports honestly when there is nothing to draw from', async () => {
     const ctx = await setupContext();
     const project = await createProject(ctx.scope, ctx.user.id);
