@@ -22,6 +22,8 @@ import {
   type TenantScope,
 } from './store';
 
+const log = logger('db.supabase');
+
 /**
  * How far down the queue a single claim will look for something it can take.
  *
@@ -29,8 +31,6 @@ import {
  * round trip per blocked job is the price, and the alternative — stopping at
  * the first row that will not budge — stops the whole deployment.
  */
-const log = logger('db.supabase');
-
 export const CLAIM_CANDIDATES = 10;
 
 /** How many unknown columns one write will shed before giving up. */

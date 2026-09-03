@@ -226,16 +226,26 @@ function escAttr(stack: string): string {
  * boxes. Naming the bundled family before the generic keyword means the worst
  * case is a card typeset in Inter rather than a card with no words on it.
  */
+const GENERIC_FAMILIES = ['sans-serif', 'serif', 'monospace', 'system-ui', 'cursive'];
+
 export function withBundledFallback(stack: string): string {
-  const cleaned = stack.trim();
-  if (!cleaned) return `${BUNDLED_FONT_FAMILY}, sans-serif`;
-  const families = cleaned.split(',').map((f) => f.trim().toLowerCase());
-  if (families.includes(BUNDLED_FONT_FAMILY.toLowerCase())) return cleaned;
-  const generic = families[families.length - 1];
-  const isGeneric = ['sans-serif', 'serif', 'monospace', 'system-ui', 'cursive'].includes(generic);
-  return isGeneric
-    ? `${cleaned.slice(0, cleaned.lastIndexOf(','))}, ${BUNDLED_FONT_FAMILY}, ${generic}`
-    : `${cleaned}, ${BUNDLED_FONT_FAMILY}, sans-serif`;
+  const families = stack
+    .split(',')
+    .map((f) => f.trim())
+    .filter(Boolean);
+  if (families.length === 0) return `${BUNDLED_FONT_FAMILY}, sans-serif`;
+
+  const lower = families.map((f) => f.toLowerCase());
+  if (lower.includes(BUNDLED_FONT_FAMILY.toLowerCase())) return families.join(', ');
+
+  // The bundled family goes *before* the generic keyword, never after it: a
+  // generic is where the browser stops looking, so anything past it is dead.
+  const last = lower[lower.length - 1];
+  const insertAt = GENERIC_FAMILIES.includes(last) ? families.length - 1 : families.length;
+  const next = [...families];
+  next.splice(insertAt, 0, BUNDLED_FONT_FAMILY);
+  if (insertAt === families.length) next.push('sans-serif');
+  return next.join(', ');
 }
 
 /**

@@ -199,6 +199,20 @@ describe('font stacks', () => {
     expect(withBundledFallback('   ')).toBe(`${BUNDLED_FONT_FAMILY}, sans-serif`);
   });
 
+  it('handles a stack that is nothing but a generic keyword', () => {
+    // The single-family case: there is no comma to split on, and the family
+    // itself is where the browser stops looking, so the bundled one has to go
+    // in front of it rather than after.
+    expect(withBundledFallback('monospace')).toBe(`${BUNDLED_FONT_FAMILY}, monospace`);
+    expect(withBundledFallback('serif')).toBe(`${BUNDLED_FONT_FAMILY}, serif`);
+  });
+
+  it('tidies a stack rather than mangling it', () => {
+    expect(withBundledFallback('Archivo ,  ,Helvetica Neue , sans-serif')).toBe(
+      `Archivo, Helvetica Neue, ${BUNDLED_FONT_FAMILY}, sans-serif`,
+    );
+  });
+
   it('reaches the rendered card', () => {
     const svg = hookCard({
       hook: 'A hook',
