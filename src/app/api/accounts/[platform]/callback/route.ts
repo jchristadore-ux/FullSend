@@ -165,7 +165,7 @@ export async function GET(
       const candidates = Array.isArray(e.meta?.candidates) ? e.meta.candidates : [];
       const pick = Buffer.from(JSON.stringify(candidates), 'utf8').toString('base64url');
       return NextResponse.redirect(
-        `${settingsUrl}?choose=${raw}&candidates=${encodeURIComponent(pick)}`,
+        `${settingsUrl}?choose=${encodeURIComponent(raw)}&candidates=${encodeURIComponent(pick)}`,
       );
     }
     return NextResponse.redirect(`${settingsUrl}?error=${encodeURIComponent(message)}`);

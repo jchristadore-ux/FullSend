@@ -8,6 +8,7 @@ import { setupGuide, setupValues } from '@/lib/social/setup-guides';
 import { storageAvailable } from '@/lib/creative/media';
 import { env } from '@/lib/env';
 import { AccountsView, type AccountCandidate } from '@/components/app/AccountsView';
+import { PLATFORMS, type Platform } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Accounts' };
@@ -78,7 +79,15 @@ export default async function AccountsPage({
         connected: params.connected ?? null,
         error: params.error ?? null,
         reconnect: params.reconnect ?? null,
-        choosePlatform: params.choose ?? null,
+        /*
+         * Checked against the known platforms rather than trusted. It arrives
+         * on a URL and is built into the href of a button somebody is about to
+         * press; a value from a query string has no business deciding where
+         * that link points.
+         */
+        choosePlatform: PLATFORMS.includes(params.choose as Platform)
+          ? (params.choose as Platform)
+          : null,
         candidates: parseCandidates(params.candidates),
       }}
     />
