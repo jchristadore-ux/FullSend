@@ -27,7 +27,7 @@ import {
   probeInkCoverage,
   resetFontState,
 } from '@/lib/creative/fonts';
-import { assertNotBlank, MIN_IMAGE_STDDEV } from '@/lib/creative/media';
+import { assertNotBlank, ensurePublicUrl, MIN_IMAGE_STDDEV, publicUrlsFor } from '@/lib/creative/media';
 import { hookCard, slideCard, withBundledFallback } from '@/lib/creative/render';
 import { materializeCreative, regenerateCreative } from '@/lib/creative/pipeline';
 import { paletteFor } from '@/lib/brand/identity';
@@ -527,5 +527,71 @@ describe('brand-specific creative', () => {
     });
     expect(svg).toContain('#123456');
     expect(svg).toContain('Fraunces');
+  });
+});
+
+/* ── Media that a platform could not fetch ──────────────────────────────── */
+
+describe('an asset with no usable media', () => {
+  async function assetFor(
+    ctx: TestContext,
+    project: Project,
+    overrides: Record<string, unknown> = {},
+  ) {
+    return db().insert(ctx.scope, 'creative_assets', {
+      id: newId(),
+      project_id: project.id,
+      content_item_id: null,
+      kind: 'image',
+      source: 'svg_render',
+      mime_type: 'image/svg+xml',
+      width: 1080,
+      height: 1350,
+      url: null,
+      storage_path: null,
+      svg: null,
+      alt_text: 'nothing',
+      created_at: nowIso(),
+      ...overrides,
+    } as never);
+  }
+
+  it('is refused rather than published as a dead URL', async () => {
+    const ctx = await setupContext();
+    const project = await createProject(ctx.scope, ctx.user.id);
+    const asset = await assetFor(ctx, project);
+
+    // Neither a URL nor anything to draw. Instagram fetches media itself, so
+    // the alternative to failing here is a publish that fails at Meta with an
+    // error about the media, which reads as a content problem and is not one.
+    await expect(ensurePublicUrl(ctx.scope, asset)).rejects.toMatchObject({
+      code: 'media_missing',
+    });
+  });
+
+  it('passes a URL that already exists straight through', async () => {
+    const ctx = await setupContext();
+    const project = await createProject(ctx.scope, ctx.user.id);
+    const asset = await assetFor(ctx, project, {
+      url: 'https://cdn.example.test/shot.png',
+      source: 'repo_screenshot',
+    });
+
+    await expect(ensurePublicUrl(ctx.scope, asset)).resolves.toBe(
+      'https://cdn.example.test/shot.png',
+    );
+  });
+
+  it('never resolves another project’s asset', async () => {
+    const ctx = await setupContext();
+    const mine = await createProject(ctx.scope, ctx.user.id, { name: 'AfterIDo' });
+    const theirs = await createProject(ctx.scope, ctx.user.id, { name: 'FullSend' });
+
+    const foreign = await assetFor(ctx, theirs, { url: 'https://cdn.example.test/theirs.png' });
+    const own = await assetFor(ctx, mine, { url: 'https://cdn.example.test/mine.png' });
+
+    const media = await publicUrlsFor(ctx.scope, mine.id, [foreign.id, own.id]);
+
+    expect(media.images).toEqual(['https://cdn.example.test/mine.png']);
   });
 });
