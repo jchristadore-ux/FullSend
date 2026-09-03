@@ -40,6 +40,8 @@ async function makePost(
     video_plan: null,
     slides: null,
     creative_asset_ids: [],
+    generation_state: 'complete' as const,
+    generation_error: null,
     status: 'approved',
     dedup_hash: newId(),
     qc: null,

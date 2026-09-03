@@ -103,7 +103,16 @@ export class MockAdapter implements PlatformAdapter {
     };
   }
 
-  async getAccount(): Promise<AccountInfo> {
+  /**
+   * Accounts this mock login can reach.
+   *
+   * Configurable so the suite can model the case that matters for running
+   * several brands: one application, one person, and more than one eligible
+   * account to choose between.
+   */
+  accounts: AccountInfo[] = [];
+
+  private defaultAccount(): AccountInfo {
     return {
       externalId: `mock-${this.platform}-account`,
       username: `mock_${this.platform}`,
@@ -111,7 +120,44 @@ export class MockAdapter implements PlatformAdapter {
       avatarUrl: null,
       followers: 1200,
       metadata: { privacy_level_options: ['PUBLIC_TO_EVERYONE', 'SELF_ONLY'] },
+      platformToken: null,
     };
+  }
+
+  async listAccounts(): Promise<AccountInfo[]> {
+    return this.accounts.length ? this.accounts : [this.defaultAccount()];
+  }
+
+  async getAccount(_tokens?: TokenSet, preferredExternalId?: string | null): Promise<AccountInfo> {
+    const candidates = await this.listAccounts();
+    if (preferredExternalId) {
+      const wanted = candidates.find((c) => c.externalId === preferredExternalId);
+      if (!wanted) {
+        throw new FullSendError(
+          'connection_error',
+          'This login does not manage that account',
+          { status: 409, remedy: 'Sign in as the account this brand publishes from.' },
+        );
+      }
+      return wanted;
+    }
+    if (candidates.length === 1) return candidates[0];
+    throw new FullSendError(
+      'instagram_account_choice_required',
+      'This login can manage more than one account',
+      {
+        status: 409,
+        remedy: 'Choose which account this brand should publish to.',
+        meta: {
+          candidates: candidates.map((c) => ({
+            externalId: c.externalId,
+            username: c.username,
+            displayName: c.displayName,
+            followers: c.followers,
+          })),
+        },
+      },
+    );
   }
 
   async publish(

@@ -5,6 +5,8 @@ import { badRequest, notFound } from '@/lib/errors';
 import { disconnect } from '@/lib/social/connections';
 import { verifyConnection } from '@/lib/automation/autopilot';
 import { platformStatus } from '@/lib/social/registry';
+import { publicAccount, publicAccounts } from '@/lib/social/account-view';
+import { metaAppConfig } from '@/lib/social/meta-app';
 import { setupGuide, setupValues } from '@/lib/social/setup-guides';
 import { storageAvailable } from '@/lib/creative/media';
 import { env } from '@/lib/env';
@@ -12,6 +14,14 @@ import { PLATFORMS, type Platform } from '@/lib/types';
 
 export const runtime = 'nodejs';
 
+/**
+ * Everything the Accounts page shows.
+ *
+ * Accounts go out through `publicAccount`, never as stored rows. The stored
+ * row carries `platform_metadata`, which is a free-form column that has held a
+ * live Facebook Page token — returning rows verbatim published a publishing
+ * credential to every browser that loaded this page.
+ */
 export const GET = route(async ({ session, req }) => {
   const projectId = new URL(req.url).searchParams.get('project');
   if (!projectId) throw badRequest('No project specified');
@@ -21,20 +31,33 @@ export const GET = route(async ({ session, req }) => {
 
   const accounts = await listSocialAccounts(session.scope, project.id);
   const status = platformStatus();
+  const meta = metaAppConfig();
 
   const mediaPrefix = storageAvailable()
     ? `${env.supabase.url}/storage/v1/object/public/${env.supabase.storageBucket}/`
     : null;
 
   return {
-    accounts,
+    accounts: publicAccounts(accounts),
     platforms: status.map((s) => ({
       ...s,
-      account: accounts.find((a) => a.platform === s.platform) ?? null,
+      account: publicAccount(accounts.find((a) => a.platform === s.platform) ?? null),
       guide: setupGuide(s.platform),
     })),
     setupValues: setupValues(env.appUrl, mediaPrefix),
     storageReady: storageAvailable(),
+    /*
+     * The application, as distinct from the accounts on it. One Meta app
+     * serves every brand, so whether it is configured is a fact about the
+     * deployment — and stating it here is what stops the second account being
+     * treated as a second setup.
+     */
+    metaApp: {
+      configured: meta.configured,
+      loginMode: meta.loginMode,
+      scopes: meta.scopes,
+      redirectUri: meta.redirectUri,
+    },
   };
 });
 
@@ -55,7 +78,7 @@ export const POST = route(
     const account = await db().findOne(session.scope, 'social_accounts', {
       where: { project_id: project.id, platform },
     });
-    return { ...result, account };
+    return { ...result, account: publicAccount(account) };
   },
   {
     schema: z.object({

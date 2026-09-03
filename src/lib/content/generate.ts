@@ -6,7 +6,7 @@ import { newId, nowIso } from '../ids';
 import { logger } from '../logger';
 import { contentBatchSchema } from '../schemas';
 import { canAutoPublish, runQualityControl } from '../qc/check';
-import { renderCreative } from '../creative/render';
+import { materializeCreative, notifyCreativeFailures } from '../creative/pipeline';
 import { buildVideoPackage } from '../video/package';
 import { checkDuplicate, contentFingerprint } from './dedup';
 import type { Slot } from './mix';
@@ -31,7 +31,7 @@ Non-negotiable:
 Return JSON only.`;
 
 export interface GenerateContentInput { project: Project; analysis: ProductAnalysis; brand: BrandProfile; strategy: MarketingStrategy; personas: Persona[]; pillars: ContentPillar[]; campaigns: Campaign[]; slots: Slot[]; origin?: ContentItem['origin']; brief?: string; }
-export interface GenerateContentResult { created: ContentItem[]; rejectedDuplicates: number; blockedByQc: number; costUsd: number; /** Slots this call did not reach. The next job picks them up. */ remainingSlots: number; }
+export interface GenerateContentResult { created: ContentItem[]; rejectedDuplicates: number; blockedByQc: number; costUsd: number; /** Posts whose copy was written but whose creative could not be produced. */ creativeFailures: number; /** Slots this call did not reach. The next job picks them up. */ remainingSlots: number; }
 /**
  * Posts per AI call, and per durable job.
  *
@@ -88,11 +88,11 @@ export const MAX_CONTENT_OUTPUT_TOKENS = contentMaxTokens(CONTENT_BATCH_SIZE);
 
 export async function generateContent(scope: TenantScope, input: GenerateContentInput): Promise<GenerateContentResult> {
   const { project, analysis, brand, strategy, personas, pillars, campaigns, slots } = input;
-  if (slots.length === 0) return { created: [], rejectedDuplicates: 0, blockedByQc: 0, costUsd: 0, remainingSlots: 0 };
+  if (slots.length === 0) return { created: [], rejectedDuplicates: 0, blockedByQc: 0, costUsd: 0, creativeFailures: 0, remainingSlots: 0 };
   const settings = await getSettings(scope, project.id); const existing = await listContent(scope, project.id);
   const seen = existing.map((c) => ({ id: c.id, platform: c.platform, hook: c.hook, caption: c.caption, dedup_hash: c.dedup_hash }));
   const recent = existing.slice(-30).map((c) => ({ hook: c.hook, caption: c.caption }));
-  const created: ContentItem[] = []; let rejectedDuplicates = 0; let blockedByQc = 0; let costUsd = 0;
+  const created: ContentItem[] = []; const creativeFailures: string[] = []; let rejectedDuplicates = 0; let blockedByQc = 0; let costUsd = 0;
   const batch = slots.slice(0, CONTENT_BATCH_SIZE);
   const remainingSlots = Math.max(0, slots.length - batch.length);
   const briefs = batch.map((slot, i) => { const pillar = pickPillar(pillars, slot.pillarType); const campaign = pickCampaign(campaigns, slot.at); const persona = personas[i % Math.max(1, personas.length)]; return { seed: `${project.id}:${slot.at.toISOString()}:instagram`, platform: 'instagram', format: slot.format, pillar_type: slot.pillarType, pillar_name: pillar?.name ?? slot.pillarType, campaign: campaign?.name ?? null, campaign_angle: campaign?.angle ?? null, persona: persona?.name ?? null, topic: pickTopic(pillar, analysis, i), scheduled_for: slot.at.toISOString() }; });
@@ -138,9 +138,18 @@ export async function generateContent(scope: TenantScope, input: GenerateContent
      * property of a sentence you can test for. Where it came from is.
      */
     const decision = canAutoPublish(qc, project.autopilot_mode, slot.pillarType, settings?.require_approval_for_promotion ?? true); const status: ContentItem['status'] = !qc.passed ? 'review_required' : degraded ? 'review_required' : decision.allowed ? 'approved' : 'approval_required'; if (!qc.passed) blockedByQc++;
-    const item: ContentItem = { id: newId(), project_id: project.id, campaign_id: campaign?.id ?? null, pillar_id: pillar?.id ?? null, persona_id: persona?.id ?? null, platform: 'instagram', format: slot.format, hook: generated.hook, script: generated.script, caption: generated.caption, cta: generated.cta, hashtags: generated.hashtags, video_plan: videoPlan, slides: generated.slides, creative_asset_ids: [], status, dedup_hash: contentFingerprint(candidate), qc, scheduled_for: slot.at.toISOString(), published_at: null, origin: input.origin ?? 'initial', ai_cost_usd: Math.round((batchCost / Math.max(1, batch.length)) * 1e6) / 1e6, created_at: nowIso(), updated_at: nowIso() };
-    const saved = await db().insert(scope, 'content_items', item); const assets = await renderCreative(scope, { project, item: saved, brand, analysis });
-    if (assets.length) { await db().update(scope, 'content_items', saved.id, { creative_asset_ids: assets.map((a) => a.id) }); saved.creative_asset_ids = assets.map((a) => a.id); }
+    const item: ContentItem = { id: newId(), project_id: project.id, campaign_id: campaign?.id ?? null, pillar_id: pillar?.id ?? null, persona_id: persona?.id ?? null, platform: 'instagram', format: slot.format, hook: generated.hook, script: generated.script, caption: generated.caption, cta: generated.cta, hashtags: generated.hashtags, video_plan: videoPlan, slides: generated.slides, creative_asset_ids: [], status, generation_state: 'copy_complete', generation_error: null, dedup_hash: contentFingerprint(candidate), qc, scheduled_for: slot.at.toISOString(), published_at: null, origin: input.origin ?? 'initial', ai_cost_usd: Math.round((batchCost / Math.max(1, batch.length)) * 1e6) / 1e6, created_at: nowIso(), updated_at: nowIso() };
+    const inserted = await db().insert(scope, 'content_items', item);
+    /*
+     * Copy is written; now the visual. This is a separate, recorded step
+     * because it is the one that used to fail invisibly: the post was already
+     * saved, so a render that threw left a post with real copy, no images and
+     * nothing anywhere saying so. `materializeCreative` records the outcome on
+     * the post itself and holds it for review when the creative did not happen.
+     */
+    const outcome = await materializeCreative(scope, { project, item: inserted, brand, analysis });
+    const saved = outcome.item;
+    if (outcome.failed) creativeFailures.push(outcome.error ?? 'The creative could not be produced.');
     created.push(saved); seen.push({ id: saved.id, platform: saved.platform, hook: saved.hook, caption: saved.caption, dedup_hash: saved.dedup_hash }); recent.push({ hook: saved.hook, caption: saved.caption });
   }
   /*
@@ -148,6 +157,8 @@ export async function generateContent(scope: TenantScope, input: GenerateContent
    * there while the founder wonders why the calendar stopped filling — and the
    * reason it is held is not something they could deduce by reading it.
    */
+  await notifyCreativeFailures(scope, project, creativeFailures);
+
   if (degraded && created.length) {
     await notify(scope, {
       user_id: project.user_id,
@@ -163,7 +174,7 @@ export async function generateContent(scope: TenantScope, input: GenerateContent
     });
   }
 
-  log.info('content generated', { project: project.id, created: created.length, duplicates: rejectedDuplicates, qcBlocked: blockedByQc, degraded, cost: costUsd }); return { created, rejectedDuplicates, blockedByQc, costUsd, remainingSlots };
+  log.info('content generated', { project: project.id, created: created.length, duplicates: rejectedDuplicates, qcBlocked: blockedByQc, creativeFailures: creativeFailures.length, degraded, cost: costUsd }); return { created, rejectedDuplicates, blockedByQc, costUsd, creativeFailures: creativeFailures.length, remainingSlots };
 }
 function needsVideo(format: string): boolean { return format === 'reel' || format === 'short_video' || format === 'story'; }
 function pickPillar(pillars: ContentPillar[], type: PillarType): ContentPillar | null { return pillars.filter((p) => p.type === type)[0] ?? pillars[0] ?? null; }

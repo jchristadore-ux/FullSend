@@ -113,10 +113,20 @@ export async function assertPublishable(
     );
   }
 
-  // 4. A destination account, resolved once and thereafter binding.
+  // 4. The post is actually finished. Copy without creative is not a post,
+  //    and publishing one puts an empty image on a real feed. The scheduler
+  //    already refuses these; this is the check on the last path to Instagram.
+  if (content.generation_state === 'failed') {
+    throw refuse(
+      `The creative for this post was never produced: ${content.generation_error ?? 'unknown reason'}`,
+      'Regenerate the creative from the post, or delete it. FullSend will not publish a post with no visual.',
+    );
+  }
+
+  // 5. A destination account, resolved once and thereafter binding.
   const account = await resolveDestination(scope, post, project);
 
-  // 5. The account belongs to this project. The database's own
+  // 6. The account belongs to this project. The database's own
   //    unique (project_id, platform) makes this hard to violate, which is
   //    exactly why it is worth asserting: the check is cheap and the failure
   //    it catches is unrecoverable.
@@ -140,7 +150,7 @@ export async function assertPublishable(
     );
   }
 
-  // 6. The account is usable. A disconnected destination is a held post, not a
+  // 7. The account is usable. A disconnected destination is a held post, not a
   //    reason to fall back to some other account.
   if (account.status === 'disconnected') {
     throw refuse(
@@ -149,7 +159,7 @@ export async function assertPublishable(
     );
   }
 
-  // 7. The brand this content was generated in. A missing profile does not
+  // 8. The brand this content was generated in. A missing profile does not
   //    block publishing — the copy is already written and already passed
   //    quality control — but it is returned so the caller can record which
   //    brand a post went out under.

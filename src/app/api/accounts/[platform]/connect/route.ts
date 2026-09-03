@@ -64,8 +64,24 @@ export async function GET(
       );
     }
 
+    /*
+     * Which account this authorization is for, when the caller already knows.
+     *
+     * One application serves many accounts, so "connect Instagram" is not on
+     * its own a complete instruction: a login that administers several
+     * eligible accounts has to be told which one this brand publishes to. The
+     * Accounts page passes it after the founder picks, and a reconnect passes
+     * the account already connected so it cannot land somewhere else.
+     */
+    const accountHint = req.nextUrl.searchParams.get('account');
+
     const redirectUri = `${env.appUrl}/api/accounts/${platform}/callback`;
-    const state = signState({ projectId, userId: session.user.id, platform });
+    const state = signState({
+      projectId,
+      userId: session.user.id,
+      platform,
+      accountHint: accountHint ?? null,
+    });
     const { url, codeVerifier } = adapter.authorizeUrl(state, redirectUri);
 
     const response = NextResponse.redirect(url);

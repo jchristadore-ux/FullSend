@@ -66,8 +66,21 @@ export interface AccountInfo {
   displayName: string | null;
   avatarUrl: string | null;
   followers: number;
-  /** Platform-specific facts the publisher needs, e.g. privacy options. */
+  /**
+   * Platform-specific facts the publisher needs, e.g. privacy options.
+   *
+   * Facts only. This travels to the browser with the account row, so nothing
+   * secret belongs in it — a credential goes in `platformToken`, which is
+   * stored encrypted and never leaves the server.
+   */
   metadata: Record<string, unknown>;
+  /**
+   * A second credential the platform issues for this specific account, such as
+   * a Facebook Page access token. Kept apart from `metadata` because it is a
+   * credential, and apart from the user token because it belongs to one
+   * account rather than to the login.
+   */
+  platformToken?: string | null;
 }
 
 export interface TokenSet {
@@ -76,6 +89,11 @@ export interface TokenSet {
   expiresAt: Date | null;
   refreshExpiresAt: Date | null;
   scopes: string[];
+  /**
+   * The account-scoped credential from `AccountInfo.platformToken`, once it has
+   * been through the vault. Present only for platforms that issue one.
+   */
+  platformToken?: string | null;
 }
 
 export interface OAuthStartResult {
@@ -93,7 +111,20 @@ export interface PlatformAdapter {
   authorizeUrl(state: string, redirectUri: string): OAuthStartResult;
   exchangeCode(code: string, redirectUri: string, codeVerifier?: string): Promise<TokenSet>;
   refresh(tokens: TokenSet): Promise<TokenSet>;
-  getAccount(tokens: TokenSet): Promise<AccountInfo>;
+  /**
+   * The account this authorization is for.
+   *
+   * `preferredExternalId` pins a reconnect to the account already connected,
+   * so a login that can reach several accounts cannot silently rebind a brand
+   * to a different one.
+   */
+  getAccount(tokens: TokenSet, preferredExternalId?: string | null): Promise<AccountInfo>;
+  /**
+   * Every account this authorization could publish to. One application serves
+   * many accounts, and this is the list that makes choosing between them
+   * possible rather than accidental.
+   */
+  listAccounts?(tokens: TokenSet): Promise<AccountInfo[]>;
   publish(tokens: TokenSet, account: AccountInfo, input: PublishInput): Promise<PublishResult>;
   /**
    * Asks the platform whether a submitted container already went live.

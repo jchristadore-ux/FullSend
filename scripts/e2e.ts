@@ -18,7 +18,9 @@
 // Environment defaults must load before anything that reads process.env.
 import './script-env';
 
+import sharp from 'sharp';
 import { setStore, MemoryStore, systemScope, userScope } from '../src/lib/db';
+import { MIN_IMAGE_STDDEV, rasterize } from '../src/lib/creative/media';
 import { db, enqueueOnce } from '../src/lib/db/repo';
 import { newId, nowIso } from '../src/lib/ids';
 import { installMockAdapters } from '../src/lib/social/registry';
@@ -350,6 +352,33 @@ ${X}`);
     'Creative assets are real',
     `${assets.length} assets, all with renderable content`,
   );
+
+  check(
+    generated.created.every((c) => c.generation_state === 'complete'),
+    'Every post finished being made',
+    `${generated.created.filter((c) => c.generation_state === 'complete').length}/${generated.created.length} complete, 0 failed`,
+  );
+
+  /*
+   * The check that would have caught the blank posts.
+   *
+   * Every earlier assertion here passes on an image with nothing in it: the
+   * asset exists, it has SVG, the copy is right. So this one rasterises a real
+   * card the way publishing does and counts the pixels. A card that drew its
+   * background and no words has almost no variation in it; a typeset one has
+   * plenty. Nothing short of looking at the pixels can tell them apart.
+   */
+  const drawable = assets.find((a) => a.svg);
+  if (drawable) {
+    const jpeg = await rasterize(drawable.svg!, { width: 540, height: 675 });
+    const stats = await sharp(jpeg).stats();
+    const spread = Math.max(...stats.channels.map((c) => c.stdev));
+    check(
+      spread >= 8,
+      'Creative rasterises with words on it',
+      `pixel spread ${spread.toFixed(1)} — a blank card scores under ${MIN_IMAGE_STDDEV}`,
+    );
+  }
 
   const sample = generated.created[0];
   console.log(`   ${D}┌ sample post ────────────────────────────────${X}`);

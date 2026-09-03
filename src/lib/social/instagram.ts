@@ -21,6 +21,11 @@ import { env } from '../env';
 import { connectionError, FullSendError } from '../errors';
 import { logger } from '../logger';
 import type { ContentFormat, PostMetrics } from '../types';
+import { classifyMetaAuthFailure } from './meta-app';
+import {
+  INSTAGRAM_SCOPES_FACEBOOK_LOGIN,
+  INSTAGRAM_SCOPES_INSTAGRAM_LOGIN,
+} from './instagram-scopes';
 import {
   emptyMetrics,
   type AccountInfo,
@@ -34,30 +39,10 @@ import {
 
 const log = logger('instagram');
 
-/*
- * ⚠ These are the pre-2025 names. Meta retired `instagram_basic` and
- * `instagram_content_publish` on 27 January 2025, replacing them with the
- * `instagram_business_*` permissions below. This list is kept only for the
- * Facebook-Login-for-Business path, which is no longer the default; check it
- * against Meta's current documentation before submitting an App Review that
- * relies on it, or a review can be spent to be told the permission no longer
- * exists.
- */
-export const INSTAGRAM_SCOPES_FACEBOOK_LOGIN = [
-  'instagram_basic',
-  'instagram_content_publish',
-  'instagram_manage_insights',
-  'pages_show_list',
-  'pages_read_engagement',
-  'business_management',
-];
-
-/** The current permissions, and what the default login mode asks for. */
-export const INSTAGRAM_SCOPES_INSTAGRAM_LOGIN = [
-  'instagram_business_basic',
-  'instagram_business_content_publish',
-  'instagram_business_manage_insights',
-];
+export {
+  INSTAGRAM_SCOPES_FACEBOOK_LOGIN,
+  INSTAGRAM_SCOPES_INSTAGRAM_LOGIN,
+} from './instagram-scopes';
 
 /*
  * Meta transcodes asynchronously, and a Reel can take minutes. Waiting it out
@@ -217,7 +202,78 @@ export class InstagramAdapter implements PlatformAdapter {
 
   /* ── Account ──────────────────────────────────────────────────────────── */
 
-  async getAccount(tokens: TokenSet): Promise<AccountInfo> {
+  /**
+   * The account this authorization is for.
+   *
+   * `preferredExternalId` is how a reconnect stays on the same account. Under
+   * Facebook Login one person can administer Pages for several brands, and the
+   * previous implementation took `pages.data.find(p => p.instagram_business_account)`
+   * — the first Page Meta happened to return. Reconnect one brand while
+   * holding another brand's Page and it would quietly rebind the project to
+   * the wrong Instagram account, with the wrong followers and the wrong feed.
+   * A connection that can silently land on a different account is not a
+   * connection anybody can rely on, so when there is a choice to make it is
+   * made explicitly or not at all.
+   */
+  async getAccount(tokens: TokenSet, preferredExternalId?: string | null): Promise<AccountInfo> {
+    const candidates = await this.listAccounts(tokens);
+
+    if (candidates.length === 0) {
+      throw connectionError(
+        'instagram',
+        'No Instagram Business account is available to this login',
+        'In the Instagram app: Settings → Account type and tools → Switch to professional account → ' +
+          'Business. Under Facebook Login the account must also be linked to a Page you administer.',
+      );
+    }
+
+    if (preferredExternalId) {
+      const wanted = candidates.find((c) => c.externalId === String(preferredExternalId));
+      if (wanted) return wanted;
+      throw connectionError(
+        'instagram',
+        'This login does not manage the Instagram account this project is already connected to',
+        `It can reach ${candidates.map((c) => `@${c.username}`).join(', ')}. Sign in as the person ` +
+          'who administers the connected account, or disconnect it first if you mean to move this ' +
+          'brand to a different account. FullSend will not move it on its own.',
+      );
+    }
+
+    if (candidates.length === 1) return candidates[0];
+
+    /*
+     * Several eligible accounts and nothing to choose between them. Picking
+     * one would be a coin toss with somebody's feed, so the caller is handed
+     * the list and asked — the Accounts page renders a button per account.
+     */
+    throw new FullSendError(
+      'instagram_account_choice_required',
+      'This login can manage more than one Instagram account',
+      {
+        status: 409,
+        retryable: false,
+        remedy: 'Choose which Instagram account this brand should publish to.',
+        meta: {
+          candidates: candidates.map((c) => ({
+            externalId: c.externalId,
+            username: c.username,
+            displayName: c.displayName,
+            followers: c.followers,
+          })),
+        },
+      },
+    );
+  }
+
+  /**
+   * Every Instagram Business account this authorization can publish to.
+   *
+   * One Meta application, many accounts: this is the list that makes that
+   * true. Under Instagram Login it is always the one account that authorized;
+   * under Facebook Login it is every Page-linked Business account the person
+   * administers.
+   */
+  async listAccounts(tokens: TokenSet): Promise<AccountInfo[]> {
     if (this.instagramLogin) {
       const me = await this.json<any>(
         `${env.meta.instagramGraphHost}/me?` +
@@ -227,51 +283,55 @@ export class InstagramAdapter implements PlatformAdapter {
           }),
       );
       this.assertBusinessAccount(me.account_type);
-      return {
-        externalId: String(me.user_id ?? me.id),
-        username: me.username ?? '',
-        displayName: me.name ?? null,
-        avatarUrl: me.profile_picture_url ?? null,
-        followers: me.followers_count ?? 0,
-        metadata: { account_type: me.account_type, login_mode: 'instagram_login' },
-      };
+      return [
+        {
+          externalId: String(me.user_id ?? me.id),
+          username: me.username ?? '',
+          displayName: me.name ?? null,
+          avatarUrl: me.profile_picture_url ?? null,
+          followers: me.followers_count ?? 0,
+          metadata: { account_type: me.account_type, login_mode: 'instagram_login' },
+          platformToken: null,
+        },
+      ];
     }
 
-    // Facebook Login: find the Page, then its linked Instagram business account.
+    // Facebook Login: every Page, and the Instagram business account on it.
     const pages = await this.json<any>(
       this.graph('/me/accounts') +
         '?' +
         new URLSearchParams({
-          fields: 'id,name,access_token,instagram_business_account{id,username,name,profile_picture_url,followers_count}',
+          fields:
+            'id,name,access_token,instagram_business_account{id,username,name,profile_picture_url,followers_count}',
           access_token: tokens.accessToken,
         }),
     );
 
-    const page = (pages.data ?? []).find((p: any) => p.instagram_business_account);
-    if (!page) {
-      throw connectionError(
-        'instagram',
-        'No Instagram Business account is linked to your Facebook Pages',
-        'In the Instagram app: Settings → Account type and tools → Switch to professional account → ' +
-          'Business, then link it to a Facebook Page. Reconnect once that is done.',
-      );
-    }
-
-    const ig = page.instagram_business_account;
-    return {
-      externalId: String(ig.id),
-      username: ig.username ?? '',
-      displayName: ig.name ?? page.name ?? null,
-      avatarUrl: ig.profile_picture_url ?? null,
-      followers: ig.followers_count ?? 0,
-      metadata: {
-        page_id: page.id,
-        page_name: page.name,
-        // Publishing uses the Page token, not the user token.
-        page_access_token: page.access_token,
-        login_mode: 'facebook_login',
-      },
-    };
+    return (pages.data ?? [])
+      .filter((p: any) => p.instagram_business_account)
+      .map((page: any) => {
+        const ig = page.instagram_business_account;
+        return {
+          externalId: String(ig.id),
+          username: ig.username ?? '',
+          displayName: ig.name ?? page.name ?? null,
+          avatarUrl: ig.profile_picture_url ?? null,
+          followers: ig.followers_count ?? 0,
+          metadata: {
+            page_id: page.id,
+            page_name: page.name,
+            login_mode: 'facebook_login',
+          },
+          /*
+           * The Page token publishing needs — returned as a credential, not
+           * folded into `metadata`. It used to live in `platform_metadata`,
+           * which the accounts API hands to the browser: a live publishing
+           * credential, in a JSON payload, for anyone with the page open. It
+           * now goes into the encrypted vault beside the user token.
+           */
+          platformToken: typeof page.access_token === 'string' ? page.access_token : null,
+        } satisfies AccountInfo;
+      });
   }
 
   private assertBusinessAccount(accountType?: string): void {
@@ -284,10 +344,18 @@ export class InstagramAdapter implements PlatformAdapter {
     }
   }
 
-  /** Publishing uses the Page token under Facebook Login. */
+  /**
+   * The credential a publish call is made with.
+   *
+   * Under Facebook Login that is the Page token, which arrives in the token
+   * set. The `platform_metadata` fallback is for accounts connected before the
+   * token moved into the vault — they keep working, and are upgraded the next
+   * time they reconnect.
+   */
   private publishToken(tokens: TokenSet, account: AccountInfo): string {
-    const pageToken = account.metadata?.page_access_token;
-    return typeof pageToken === 'string' && pageToken ? pageToken : tokens.accessToken;
+    if (tokens.platformToken) return tokens.platformToken;
+    const legacy = account.metadata?.page_access_token;
+    return typeof legacy === 'string' && legacy ? legacy : tokens.accessToken;
   }
 
   /* ── Publishing ───────────────────────────────────────────────────────── */
@@ -696,13 +764,22 @@ export function mapMetaError(
       'Reconnect Instagram in FullSend → Accounts. Publishing resumes automatically once you do.',
     );
   }
-  // 10 / 200-299: missing permission.
+  /*
+   * 10 / 200-299: missing permission — but *whose* problem it is matters. An
+   * app still in Development Mode refuses every account that does not hold a
+   * role on it, and Meta reports that here, in the same bucket as an ordinary
+   * missing scope. Reading it as an account problem is what sends somebody off
+   * to add another tester instead of taking the application Live once.
+   */
   if (code === 10 || (code !== undefined && code >= 200 && code <= 299)) {
-    return connectionError(
-      'instagram',
-      `Instagram denied this action: ${message}`,
-      'The instagram_business_content_publish permission is missing or not yet approved. ' +
-        'Check App Review status in the Meta dashboard.',
+    return (
+      classifyMetaAuthFailure(message) ??
+      connectionError(
+        'instagram',
+        `Instagram denied this action: ${message}`,
+        'The instagram_business_content_publish permission is missing or not yet approved. ' +
+          'Check App Review status in the Meta dashboard.',
+      )
     );
   }
   // 4 / 17 / 32 / 613: rate limiting.
@@ -726,10 +803,13 @@ export function mapMetaError(
       remedy: 'Usually a media URL or format problem. Check the creative and retry.',
     });
   }
-  return new FullSendError('platform_error', `Instagram error: ${message}`, {
-    retryable: status >= 500,
-    meta: { code, subcode: error.error_subcode },
-  });
+  return (
+    classifyMetaAuthFailure(message) ??
+    new FullSendError('platform_error', `Instagram error: ${message}`, {
+      retryable: status >= 500,
+      meta: { code, subcode: error.error_subcode },
+    })
+  );
 }
 
 function sleep(ms: number): Promise<void> {

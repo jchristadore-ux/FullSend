@@ -59,6 +59,35 @@ export function ContentDetail({
   const [note, setNote] = useState<string | null>(null);
 
   const locked = item.status === 'published';
+  const creativeFailed = item.generation_state === 'failed';
+
+  /**
+   * Re-render the creative for this post.
+   *
+   * The counterpart to creative generation recording a real failure: a founder
+   * who is told the visual could not be produced needs a way to try again that
+   * is not "regenerate the whole calendar".
+   */
+  async function retryCreative() {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const res = await fetch(`/api/content/${item.id}/creative`, { method: 'POST' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.remedy ?? json.message ?? 'Could not regenerate');
+      setNote(
+        json.failed
+          ? `Still failing: ${json.error}`
+          : `Creative regenerated — ${json.assets} image${json.assets === 1 ? '' : 's'}.`,
+      );
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function save() {
     setBusy(true);
@@ -156,8 +185,31 @@ export function ContentDetail({
         {/* Creative. */}
         <div className="space-y-3">
           {creative.length === 0 ? (
-            <div className="panel flex aspect-[4/5] items-center justify-center p-6 text-center">
-              <p className="text-sm text-dim">No creative generated.</p>
+            /*
+             * "No creative generated." was true and useless. A post arrives
+             * here with no images for one of two reasons — it has not been
+             * rendered yet, or the render failed — and only the second one is
+             * a problem the founder can do anything about. So say which, show
+             * the reason, and give them the button.
+             */
+            <div className="panel flex aspect-[4/5] flex-col items-center justify-center gap-3 p-6 text-center">
+              <p
+                className={`font-mono text-[10px] uppercase tracking-wider ${creativeFailed ? 'text-fail' : 'text-dim'}`}
+              >
+                {creativeFailed ? 'Creative failed' : 'No creative generated'}
+              </p>
+              {item.generation_error && (
+                <p className="text-[12px] leading-relaxed text-dim">{item.generation_error}</p>
+              )}
+              {!locked && (
+                <button
+                  onClick={retryCreative}
+                  disabled={busy}
+                  className="btn-send !px-4 !py-2 text-[10px]"
+                >
+                  {busy ? '…' : 'REGENERATE CREATIVE'}
+                </button>
+              )}
             </div>
           ) : (
             creative.map((c) =>

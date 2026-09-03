@@ -258,7 +258,13 @@ describe('the render palette', () => {
     });
 
     expect(svg).toContain('#1a73e8');
-    expect(svg).toContain('Playfair Display, serif');
+    /*
+     * The project's own families lead. Inter follows as the bundled fallback —
+     * it is what the card is typeset in on a host that has no fonts installed
+     * at all, which is every serverless host and was how a calendar filled
+     * with wordless images.
+     */
+    expect(svg).toContain('Playfair Display, Inter, serif');
     expect(svg).toContain('Inter, sans-serif');
     // The two things that used to be baked into every card FullSend produced.
     expect(svg.toLowerCase()).not.toContain('ff5a1f');
@@ -391,6 +397,8 @@ async function fixture(ctx: TestContext, name: string): Promise<Fixture> {
     video_plan: null,
     slides: null,
     creative_asset_ids: [],
+    generation_state: 'complete' as const,
+    generation_error: null,
     status: 'scheduled',
     dedup_hash: `${name}-hash`,
     qc: null,

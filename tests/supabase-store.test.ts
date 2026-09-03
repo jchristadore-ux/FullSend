@@ -9,7 +9,7 @@
  * await fails it the same way it failed in production.
  */
 import { describe, expect, it } from 'vitest';
-import { CLAIM_CANDIDATES, SupabaseStore } from '@/lib/db/supabase-store';
+import { CLAIM_CANDIDATES, SupabaseStore, missingColumn } from '@/lib/db/supabase-store';
 import { systemScope, userScope } from '@/lib/db';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -241,5 +241,74 @@ describe('claiming a job', () => {
           c.args[1] === '2026-01-02T00:00:00.000Z',
       ),
     ).toBe(true);
+  });
+});
+
+/* ── A deploy that lands before its migration ───────────────────────────── */
+
+/**
+ * Code ships, then an admin applies the pending migration. That ordering is
+ * how every deploy works, and in the gap a write carrying a new column is
+ * rejected outright by PostgREST — which would stop content generation for
+ * every project over a column that only records progress.
+ *
+ * So the write sheds the column it names and goes through. The row is written,
+ * the new field is simply absent until the migration lands, and the Control
+ * Room already reports the migration as pending.
+ */
+describe('writing against a database whose migration has not been applied', () => {
+  const MISSING = {
+    message: "Could not find the 'generation_state' column of 'content_items' in the schema cache",
+    code: 'PGRST204',
+  };
+
+  function namesColumn() {
+    expect(missingColumn(MISSING)).toBe('generation_state');
+  }
+
+  /** Fails the first insert with PGRST204, then accepts whatever is sent. */
+  function pickyClient(): { client: SupabaseClient; sent: Record<string, unknown>[] } {
+    const sent: Record<string, unknown>[] = [];
+    let failures = 1;
+    const client = {
+      from() {
+        const self: Record<string, unknown> = {};
+        self.insert = (row: Record<string, unknown>) => {
+          sent.push(row);
+          return self;
+        };
+        self.select = () => self;
+        self.single = () => {
+          if (failures-- > 0) return Promise.resolve({ data: null, error: MISSING });
+          return Promise.resolve({ data: sent[sent.length - 1], error: null });
+        };
+        return self;
+      },
+    };
+    return { client: client as unknown as SupabaseClient, sent };
+  }
+
+  it('reads the column name out of the error', () => {
+    namesColumn();
+    expect(missingColumn({ message: 'something else', code: 'PGRST204' })).toBeNull();
+    expect(missingColumn({ message: MISSING.message, code: '23505' })).toBeNull();
+  });
+
+  it('writes the row without the column the database does not have yet', async () => {
+    const { client, sent } = pickyClient();
+    const store = new SupabaseStore(client);
+
+    const row = await store.insert(systemScope('test'), 'content_items', {
+      id: '33333333-3333-3333-3333-333333333333',
+      project_id: '44444444-4444-4444-4444-444444444444',
+      generation_state: 'complete',
+      hook: 'A hook',
+    } as never);
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toHaveProperty('generation_state');
+    expect(sent[1]).not.toHaveProperty('generation_state');
+    // The row is still written — that is the whole point.
+    expect((row as unknown as { hook: string }).hook).toBe('A hook');
   });
 });

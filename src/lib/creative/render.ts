@@ -13,6 +13,7 @@ import 'server-only';
 import { type TenantScope } from '../db';
 import { db } from '../db/repo';
 import { paletteFor, type RenderPalette } from '../brand/identity';
+import { BUNDLED_FONT_FAMILY } from './font-constants';
 import { newId, nowIso } from '../ids';
 import type {
   BrandProfile,
@@ -213,7 +214,28 @@ function esc(s: string): string {
  */
 function escAttr(stack: string): string {
   const cleaned = stack.replace(/[<>"'`;{}]/g, '').replace(/\s+/g, ' ').trim();
-  return esc(cleaned || 'sans-serif');
+  return esc(withBundledFallback(cleaned));
+}
+
+/**
+ * The font actually shipped with FullSend, appended to every stack.
+ *
+ * A brand's own typeface is asked for first and used wherever it exists. On a
+ * server that has no fonts at all — which is every serverless host — the whole
+ * stack down to `sans-serif` resolves to nothing, and librsvg draws replacement
+ * boxes. Naming the bundled family before the generic keyword means the worst
+ * case is a card typeset in Inter rather than a card with no words on it.
+ */
+export function withBundledFallback(stack: string): string {
+  const cleaned = stack.trim();
+  if (!cleaned) return `${BUNDLED_FONT_FAMILY}, sans-serif`;
+  const families = cleaned.split(',').map((f) => f.trim().toLowerCase());
+  if (families.includes(BUNDLED_FONT_FAMILY.toLowerCase())) return cleaned;
+  const generic = families[families.length - 1];
+  const isGeneric = ['sans-serif', 'serif', 'monospace', 'system-ui', 'cursive'].includes(generic);
+  return isGeneric
+    ? `${cleaned.slice(0, cleaned.lastIndexOf(','))}, ${BUNDLED_FONT_FAMILY}, ${generic}`
+    : `${cleaned}, ${BUNDLED_FONT_FAMILY}, sans-serif`;
 }
 
 /**

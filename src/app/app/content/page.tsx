@@ -61,6 +61,14 @@ export default async function ContentPage({
         videoStatus: item.video_plan?.render_status ?? null,
         videoSeconds: item.video_plan?.total_duration_seconds ?? null,
         slides: item.slides?.length ?? 0,
+        /*
+         * Whether this post was actually finished, straight off the row. A
+         * post whose creative failed used to arrive here indistinguishable
+         * from one that worked — same status, same copy, just an empty
+         * `previews` array that the card silently skipped.
+         */
+        generationState: item.generation_state ?? 'complete',
+        generationError: item.generation_error ?? null,
         previews: assets
           .map((a) => a.url ?? (a.svg ? svgDataUri(a.svg) : null))
           .filter((x): x is string => Boolean(x)),
