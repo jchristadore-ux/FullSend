@@ -16,7 +16,7 @@ import { logger } from '../logger';
 import type { ConnectionStatus, Platform, Project, SocialAccount, Uuid } from '../types';
 import { getAdapter } from './registry';
 import { platformLabel } from '../platform-labels';
-import { publicMetadata } from './account-view';
+import { withoutSecrets } from './account-view';
 import type { AccountInfo, TokenSet } from './types';
 
 const log = logger('connections');
@@ -141,7 +141,7 @@ export async function completeConnection(
     status: 'connected' as ConnectionStatus,
     status_detail: null,
     granted_scopes: tokens.scopes,
-    platform_metadata: publicMetadata(info.metadata),
+    platform_metadata: withoutSecrets(info.metadata),
     followers: info.followers,
     last_checked_at: nowIso(),
   };

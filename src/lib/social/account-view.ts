@@ -8,32 +8,47 @@
  * JSON payload, for anyone with devtools open.
  *
  * The credential now lives in the encrypted vault. This module is the second
- * half of that fix: an explicit allow-list, so the next thing somebody stores
- * in `platform_metadata` cannot leak by default. A field reaches the client
- * because it is named here, not because nobody thought about it.
+ * half of that fix, in two layers. Nothing credential-shaped is *stored* in
+ * `platform_metadata` at all (`withoutSecrets`), and what a browser sees is an
+ * explicit allow-list on top of that (`publicMetadata`) — so a field reaches a
+ * client because it is named here, not because nobody thought about it. The
+ * two are separate on purpose: adapters legitimately store facts publishing
+ * needs, and quietly dropping those breaks a platform instead of a leak.
  *
  * Client-safe: no server imports, no environment access.
  */
 import type { ConnectionStatus, Platform, SocialAccount, Uuid } from '../types';
 
-/** Metadata keys that are facts about an account rather than credentials. */
+/**
+ * Metadata keys a browser may see.
+ *
+ * An allow-list rather than a deny-list, because this is the payload that
+ * leaves the server: a field reaches a client because it is named here, not
+ * because nobody thought about it. Adapters are free to store more than this —
+ * see `withoutSecrets` — and publishing reads what it needs server-side.
+ */
 const PUBLIC_METADATA_KEYS = [
   'account_type',
   'login_mode',
   'page_id',
   'page_name',
-  'privacy_options',
-  'creator_nickname',
-  'max_video_seconds',
+  'client_audited',
+  'privacy_level_options',
+  'max_video_post_duration_sec',
+  'comment_disabled',
+  'duet_disabled',
+  'stitch_disabled',
 ] as const;
 
 /**
- * Anything matching these is treated as a credential and dropped, whatever it
- * is called. Belt and braces with the allow-list above: a key named
- * `page_access_token` would already be excluded, and this catches the one
- * somebody adds without reading this file.
+ * Anything matching these is treated as a credential, whatever it is called.
+ *
+ * Used on the way *in* as well as on the way out. `platform_metadata` is a
+ * free-form column an adapter can put anything in, and a Page access token
+ * went into it once already; a credential that is never written cannot leak
+ * from a column nobody remembered to check.
  */
-const SECRET_KEY_PATTERN = /(token|secret|password|credential|signature|key)/i;
+const SECRET_KEY_PATTERN = /(token|secret|password|credential|signature|_key$|^key$|apikey)/i;
 
 export interface PublicSocialAccount {
   id: Uuid;
@@ -51,6 +66,27 @@ export interface PublicSocialAccount {
   connected_at: string;
   /** Facts only — see `PUBLIC_METADATA_KEYS`. */
   platform_metadata: Record<string, unknown>;
+}
+
+/**
+ * What is safe to *store* on an account row.
+ *
+ * Deliberately not the allow-list. Adapters store facts publishing genuinely
+ * needs — TikTok's privacy options and duration limits, Meta's Page id — and
+ * discarding them because a list was not updated breaks the platform quietly.
+ * What must never be stored here is a credential: those belong in the
+ * encrypted vault, keyed to one account.
+ */
+export function withoutSecrets(
+  metadata: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!metadata) return out;
+  for (const [key, value] of Object.entries(metadata)) {
+    if (SECRET_KEY_PATTERN.test(key)) continue;
+    out[key] = value;
+  }
+  return out;
 }
 
 export function publicMetadata(

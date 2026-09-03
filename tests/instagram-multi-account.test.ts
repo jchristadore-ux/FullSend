@@ -25,7 +25,7 @@ import {
   metaAppAuthorizationError,
   META_GO_LIVE_REMEDY,
 } from '@/lib/social/meta-app';
-import { publicAccount, publicMetadata } from '@/lib/social/account-view';
+import { publicAccount, publicMetadata, withoutSecrets } from '@/lib/social/account-view';
 import {
   completeConnection,
   disconnect,
@@ -248,6 +248,26 @@ describe('credentials never reach a browser', () => {
       some_api_key: 'secret',
     });
     expect(cleaned).toEqual({ account_type: 'BUSINESS' });
+  });
+
+  it('still stores the facts a platform needs to publish', () => {
+    /*
+     * The allow-list guards what leaves the server, not what is kept. TikTok
+     * stores the creator's privacy options and duration limits on the account
+     * row; dropping them because a list was not updated would break posting
+     * rather than leak anything.
+     */
+    const stored = withoutSecrets({
+      privacy_level_options: ['PUBLIC_TO_EVERYONE'],
+      max_video_post_duration_sec: 600,
+      duet_disabled: false,
+      page_access_token: 'EAAG-secret',
+      union_id: 'u1',
+    });
+    expect(stored.privacy_level_options).toEqual(['PUBLIC_TO_EVERYONE']);
+    expect(stored.max_video_post_duration_sec).toBe(600);
+    expect(stored.union_id).toBe('u1');
+    expect(stored).not.toHaveProperty('page_access_token');
   });
 
   it('hands the page an account with no secrets on it', async () => {
