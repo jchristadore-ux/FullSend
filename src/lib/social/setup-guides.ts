@@ -148,10 +148,13 @@ export const INSTAGRAM_SETUP: SetupGuide = {
     {
       title: 'While the app is in Development Mode, name the account a tester',
       detail:
-        'Meta app dashboard → App roles → Roles → Add people → Instagram tester → the account’s ' +
-        'username. Then accept it as that account: instagram.com → Settings → Apps and websites ' +
-        '→ Tester invites → Accept. Two minutes, and only until the app is Live. Skip it once ' +
-        'it is.',
+        'Send the invite: Meta app dashboard → App roles → Roles → Add people → Instagram tester ' +
+        '→ the account’s exact username. Then accept it while signed in as that account: ' +
+        'instagram.com → Settings → Website permissions → Apps and websites → the Tester invites ' +
+        'tab → Accept. It is under Website permissions, near the bottom of the settings sidebar — ' +
+        'not a top-level item, which is where most people go looking for it. If that tab is empty, ' +
+        'the invite was never sent: check Roles shows the username as Pending. Two minutes, and ' +
+        'only until the app is Live.',
       href: 'https://developers.facebook.com/apps',
       verifiable: false,
     },
