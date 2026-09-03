@@ -80,6 +80,8 @@ Run the database migrations in `supabase/migrations/` in order:
 | `0002_creative_storage.sql` | The public `fullsend-creative` bucket Instagram fetches media from. |
 | `0003_durable_publishing.sql` | The columns that make a publish recoverable, and the unique index that makes publishing the same post twice impossible. |
 | `0004_analysis_commit.sql` | The commit an analysis was derived from, so the same commit is never analysed twice. |
+| `0005_project_brand_identity.sql` | Each project's own colours, type and marks, so no product is marketed in FullSend's identity. |
+| `0006_generation_state.sql` | Whether a post actually finished being made, and the vault column for a Facebook Page token. |
 
 A migration file in the repository is not a migration in the database. `GET /api/health` checks each one against the live schema — including whether the storage bucket exists and is public — and names the file to run for anything missing.
 

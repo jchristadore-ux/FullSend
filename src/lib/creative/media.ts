@@ -8,6 +8,16 @@
  *
  * Without storage configured this fails loudly with the exact remedy, because
  * publishing an unreachable URL would fail at the platform anyway.
+ *
+ * This is the *only* place creative becomes a raster. There used to be two —
+ * one writing JPEG at publish time, one writing PNG at scheduling time — and
+ * because the scheduler's ran first, the other never did. Two implementations
+ * of the same step is two sets of bugs, and only one of them gets fixed.
+ *
+ * Every raster here is proved before it is stored: the process must be able to
+ * draw text at all (see `fonts.ts`), and the image that comes out must not be
+ * a flat field of colour. A blank image stored under a public URL is worse
+ * than a failure, because everything downstream treats it as a success.
  */
 import 'server-only';
 import sharp from 'sharp';
@@ -17,6 +27,7 @@ import { FullSendError } from '../errors';
 import { logger } from '../logger';
 import { type TenantScope } from '../db';
 import { db } from '../db/repo';
+import { assertTextRenderable, ensureFontsConfigured } from './fonts';
 import type { CreativeAsset, Uuid } from '../types';
 
 const log = logger('media');
@@ -24,15 +35,55 @@ const log = logger('media');
 /** Meta accepts JPEG for feed images; keep quality high but under 8MB. */
 const JPEG_QUALITY = 88;
 
+/**
+ * How much variation an image must show before it counts as having content.
+ *
+ * A typeset card runs well into the tens; a card that drew its background and
+ * nothing else sits near zero. This does not try to be clever — the font probe
+ * is what catches missing type. This catches the wider family of "the image is
+ * empty", including a card whose copy was empty to begin with.
+ */
+export const MIN_IMAGE_STDDEV = 1.5;
+
 export async function rasterize(
   svg: string,
   size: { width: number; height: number },
   background = '#08090A',
 ): Promise<Buffer> {
-  return sharp(Buffer.from(svg, 'utf8'), { density: 144 })
+  // Before anything is drawn: can this process draw text at all? A deployment
+  // without fonts renders every card blank, and the whole point is to find
+  // that out here rather than on somebody's Instagram feed.
+  ensureFontsConfigured();
+  await assertTextRenderable();
+
+  const buffer = await sharp(Buffer.from(svg, 'utf8'), { density: 144 })
     .resize(size.width, size.height, { fit: 'contain', background })
     .jpeg({ quality: JPEG_QUALITY, progressive: true, mozjpeg: true })
     .toBuffer();
+
+  await assertNotBlank(buffer);
+  return buffer;
+}
+
+/**
+ * Refuses an image that carries no visible content.
+ *
+ * Measured on the actual pixels rather than inferred from the SVG, because the
+ * failure this exists for happens *during* rasterisation: the markup was
+ * correct and the output was empty.
+ */
+export async function assertNotBlank(image: Buffer): Promise<void> {
+  const stats = await sharp(image).stats();
+  const spread = Math.max(...stats.channels.map((c) => c.stdev));
+  if (spread >= MIN_IMAGE_STDDEV) return;
+
+  throw new FullSendError('creative_blank', 'The rendered creative came out blank', {
+    retryable: false,
+    remedy:
+      'FullSend has held this post rather than publish an empty image. Regenerate the creative ' +
+      'from the post, and if it happens again check the Control Room for the creative renderer.',
+    meta: { stddev: spread },
+  });
 }
 
 function storageClient() {
@@ -85,6 +136,11 @@ export async function uploadBuffer(
 /**
  * Ensures an asset has a URL a platform can fetch, rasterising and uploading on
  * first use. Repo screenshots already have one and pass straight through.
+ *
+ * The stored URL is also what the product previews, deliberately: the founder
+ * sees the file Instagram will fetch, not a browser's more forgiving reading
+ * of the same SVG. That is how the blank-card failure stayed invisible for as
+ * long as it did.
  */
 export async function ensurePublicUrl(
   scope: TenantScope,
@@ -109,6 +165,27 @@ export async function ensurePublicUrl(
 
   log.info('creative published to storage', { assetId: asset.id, bytes: jpeg.length });
   return url;
+}
+
+/**
+ * Materialises an asset's public form and hands the updated row back.
+ *
+ * The scheduler wants the asset, the publisher wants the URL; both go through
+ * the same code so a post cannot be scheduled against a raster that publishing
+ * would reject.
+ */
+export async function ensurePublicCreative(
+  scope: TenantScope,
+  asset: CreativeAsset,
+): Promise<CreativeAsset> {
+  const url = await ensurePublicUrl(scope, asset);
+  if (asset.url === url) return asset;
+  return {
+    ...asset,
+    url,
+    storage_path: asset.storage_path ?? `${asset.project_id}/${asset.id}.jpg`,
+    mime_type: 'image/jpeg',
+  };
 }
 
 /** Public URLs for every asset on a post, in slide order. */

@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server';
 import { env, capabilities } from '@/lib/env';
 import { isSchemaMissing } from '@/lib/db/supabase-store';
 import { queueHealth, type QueueHealth } from '@/lib/jobs/runner';
+import { fontHealth } from '@/lib/creative/fonts';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -139,6 +140,17 @@ const checkPublishingMigration = () =>
 /** 0004 — without it, the same commit is analysed again on every retry. */
 const checkAnalysisCommitMigration = () => checkColumns('product_analysis', ['commit_sha']);
 
+/** 0005 — without it, every project's creative is drawn in FullSend's colours. */
+const checkBrandIdentityMigration = () =>
+  checkColumns('brand_profiles', ['text_color', 'heading_font', 'locked_fields']);
+
+/**
+ * 0006 — without it, a post whose creative failed is indistinguishable from
+ * one that worked, which is how a calendar fills with blank images.
+ */
+const checkGenerationStateMigration = () =>
+  checkColumns('content_items', ['generation_state', 'generation_error']);
+
 type Storage =
   | { checked: false; reason: string }
   | { checked: true; exists: boolean; public?: boolean; error?: string };
@@ -233,14 +245,33 @@ async function checkTikTokFile(): Promise<TikTokFile> {
 }
 
 export async function GET(): Promise<NextResponse> {
-  const [supabase, schema, publishingMigration, analysisCommitMigration, creativeStorage] =
-    await Promise.all([
-      reachSupabase(),
-      checkSchema(),
-      checkPublishingMigration(),
-      checkAnalysisCommitMigration(),
-      checkCreativeStorage(),
-    ]);
+  const [
+    supabase,
+    schema,
+    publishingMigration,
+    analysisCommitMigration,
+    brandIdentityMigration,
+    generationStateMigration,
+    creativeStorage,
+    creativeRenderer,
+  ] = await Promise.all([
+    reachSupabase(),
+    checkSchema(),
+    checkPublishingMigration(),
+    checkAnalysisCommitMigration(),
+    checkBrandIdentityMigration(),
+    checkGenerationStateMigration(),
+    checkCreativeStorage(),
+    /*
+     * Can this deployment actually draw text?
+     *
+     * The one check that would have caught thirteen blank posts before they
+     * were scheduled. Rasterising an SVG needs a font on the machine doing the
+     * drawing, a serverless host has none, and every downstream check passes
+     * happily on an image with nothing in it.
+     */
+    fontHealth(),
+  ]);
 
   const required = {
     NEXT_PUBLIC_APP_URL: set(live('NEXT_PUBLIC_APP_URL')),
@@ -298,6 +329,20 @@ export async function GET(): Promise<NextResponse> {
           'to analyse the same one again.',
       );
     }
+    if (brandIdentityMigration.checked && !brandIdentityMigration.applied) {
+      problems.push(
+        'The brand identity columns are missing (supabase/migrations/0005_project_brand_identity.sql). ' +
+          `${fix} Without it every project's creative is drawn from the same palette instead of ` +
+          'its own.',
+      );
+    }
+    if (generationStateMigration.checked && !generationStateMigration.applied) {
+      problems.push(
+        'The generation state columns are missing (supabase/migrations/0006_generation_state.sql). ' +
+          `${fix} Without it a post whose creative failed looks exactly like one that worked, and ` +
+          'schedules itself with no image.',
+      );
+    }
     if (creativeStorage.checked && !creativeStorage.exists) {
       problems.push(
         `The "${env.supabase.storageBucket}" storage bucket does not exist. Run ` +
@@ -337,6 +382,14 @@ export async function GET(): Promise<NextResponse> {
    * and reports what came back — a check that cannot pass while the fetch TikTok
    * performs would fail.
    */
+  if (!creativeRenderer.ok) {
+    problems.push(
+      `The creative renderer cannot draw text on this host${creativeRenderer.detail ? `: ${creativeRenderer.detail}` : ''} ` +
+        'Every generated image would publish blank. Check that assets/fonts shipped with the ' +
+        'deployment, or set FULLSEND_FONT_DIR to a directory containing Inter-Regular.ttf.',
+    );
+  }
+
   const tiktokVerification = await checkTikTokFile();
 
   /*
@@ -383,8 +436,12 @@ export async function GET(): Promise<NextResponse> {
       migrations: {
         durablePublishing: publishingMigration,
         analysisCommit: analysisCommitMigration,
+        brandIdentity: brandIdentityMigration,
+        generationState: generationStateMigration,
       },
       creativeStorage,
+      /** Whether text actually rasterises here, measured rather than assumed. */
+      creativeRenderer,
       /** Whether FullSend can apply its own migrations, or needs a person to. */
       canSelfMigrate: Boolean(env.supabase.dbUrl),
       capabilities: capabilities(),

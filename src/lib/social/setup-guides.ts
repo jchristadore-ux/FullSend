@@ -1,11 +1,22 @@
 /**
  * Platform setup guides.
  *
- * Meta and TikTok both require developer registration, app review and account
- * configuration that no API can do on the founder's behalf. Rather than hiding
- * that behind a "Coming soon", FullSend ships the exact steps, in order, with
- * the values they need — the best possible handoff for the parts that genuinely
- * cannot be automated.
+ * Split down the middle, on purpose, because conflating the two halves is what
+ * made connecting a second Instagram account look like a fortnight of work:
+ *
+ *   **App setup** happens once, for the whole of FullSend, done by whoever
+ *   runs the deployment. Creating the Meta app, registering the redirect URI,
+ *   getting the publishing permissions approved, taking the app Live.
+ *
+ *   **Per account** is what each new brand does: make sure the Instagram
+ *   account is a Business account, press Connect. That is the entire list.
+ *
+ * The first Instagram account was connected while the Meta app was still in
+ * Development Mode, which works for anyone holding a role on the app — so the
+ * developer runbook and the account connection appeared to be one procedure.
+ * They are not. A second account without a role is refused, and the fix is to
+ * finish the *application* once, not to run a developer onboarding for every
+ * brand.
  *
  * Client-safe: no secrets, no server imports.
  */
@@ -33,15 +44,21 @@ export interface SetupGuide {
   outcome: string;
   /** What is still restricted even after setup, stated plainly. */
   caveats: string[];
-  steps: SetupStep[];
+  /**
+   * Done once for this FullSend deployment. Not repeated per brand, per
+   * account, or per project.
+   */
+  appSetup: SetupStep[];
+  /** What connecting one more account actually takes. */
+  perAccount: SetupStep[];
 }
 
 export const INSTAGRAM_SETUP: SetupGuide = {
   platform: 'instagram',
   title: 'Connect Instagram',
   summary:
-    'Meta requires a one-time developer setup before any tool can publish to Instagram. ' +
-    'This is the whole list. Once it is done, FullSend publishes on its own.',
+    'Meta requires one developer setup for the FullSend application — once, ever. After that, ' +
+    'every Instagram account you connect is two clicks, however many brands you run.',
   outcome:
     'FullSend publishes Reels, carousels, feed posts and Stories to your Instagram Business ' +
     'account automatically, and reads back reach, likes, comments, shares and saves.',
@@ -50,26 +67,20 @@ export const INSTAGRAM_SETUP: SetupGuide = {
     'No Facebook Page required on the default setup. FullSend uses Instagram Login, which ' +
       'connects to the account directly.',
     'Instagram caps API publishing at 100 posts per rolling 24 hours.',
-    'Meta App Review typically takes 2–4 weeks for the publishing permission.',
+    'Meta App Review typically takes 2–4 weeks for the publishing permission. It is requested ' +
+      'once for the application, not once per Instagram account.',
+    'While the Meta app is in Development Mode, only people holding a role on the app can ' +
+      'authorize it. That is why a second account is refused — take the app Live and the ' +
+      'refusal goes away for every account at once.',
   ],
-  steps: [
+  appSetup: [
     {
-      title: 'Switch Instagram to a Business account',
-      detail:
-        'In the Instagram app: Settings → Account type and tools → Switch to professional ' +
-        'account → Business. A Creator account will not work — Meta restricts content publishing ' +
-        'to Business accounts.',
-      verifiable: true,
-    },
-    {
-      title: 'Create a Meta app',
+      title: 'Create the FullSend Meta app',
       detail:
         'At developers.facebook.com, create an app of type Business, then add the Instagram ' +
         'product to it. Copy the App ID and App Secret into your FullSend environment as ' +
-        'META_APP_ID and META_APP_SECRET. No Facebook Page is needed: FullSend uses Instagram ' +
-        'Login, which talks to your Instagram account directly. Only META_LOGIN_MODE=' +
-        'facebook_login routes through a Page, and that is for running several accounts ' +
-        'through Business Manager.',
+        'META_APP_ID and META_APP_SECRET. One app serves every brand and every Instagram ' +
+        'account — do not create a second one per brand.',
       href: 'https://developers.facebook.com/apps/create/',
       copyValues: [{ label: 'OAuth redirect URI', valueKey: 'instagram_redirect_uri' }],
       verifiable: true,
@@ -95,21 +106,45 @@ export const INSTAGRAM_SETUP: SetupGuide = {
     {
       title: 'Request the publishing permissions',
       detail:
-        'App Review → Permissions and Features. Request instagram_business_basic, ' +
-        'instagram_business_content_publish and instagram_business_manage_insights. You will ' +
-        'need a screencast of the publishing flow and a privacy policy URL. Until this is ' +
-        'approved, only accounts listed as app testers can be connected. Request exactly these ' +
-        'three: the older instagram_basic and instagram_content_publish were retired on ' +
-        '27 January 2025 and asking for them spends a review to be told they no longer exist.',
+        'App Review → Permissions and Features. Request Advanced Access for ' +
+        'instagram_business_basic, instagram_business_content_publish and ' +
+        'instagram_business_manage_insights. You will need a screencast of the publishing flow ' +
+        'and a privacy policy URL. Request exactly these three: the older instagram_basic and ' +
+        'instagram_content_publish were retired on 27 January 2025 and asking for them spends a ' +
+        'review to be told they no longer exist.',
       href: 'https://developers.facebook.com/docs/app-review',
       waitTime: '2–4 weeks',
       verifiable: false,
     },
     {
-      title: 'Connect your account in FullSend',
+      title: 'Switch the app from Development to Live',
       detail:
-        'Come back to FullSend → Accounts and hit Connect Instagram. FullSend checks the account ' +
-        'is a Business account, stores the token encrypted, and starts publishing on schedule.',
+        'At the top of the Meta app dashboard there is an App Mode toggle reading Development. ' +
+        'Switch it to Live. This is the step that makes FullSend a multi-account product: in ' +
+        'Development Mode Meta only lets people with a role on the app authorize it, so the ' +
+        'first account works and every account after it is refused with "insufficient developer ' +
+        'role". Live, any Instagram Business account can connect by pressing Connect. Adding ' +
+        'each new account as an app tester is a workaround for this toggle, not a setup step.',
+      href: 'https://developers.facebook.com/docs/development/release',
+      verifiable: false,
+    },
+  ],
+  perAccount: [
+    {
+      title: 'Make sure the Instagram account is a Business account',
+      detail:
+        'In the Instagram app, signed in as that account: Settings → Account type and tools → ' +
+        'Switch to professional account → Business. A Creator account will not work — Meta ' +
+        'restricts content publishing to Business accounts.',
+      verifiable: true,
+    },
+    {
+      title: 'Press Connect Instagram',
+      detail:
+        'Open the brand in FullSend → Accounts and press Connect Instagram. Sign in as that ' +
+        'account, approve the permissions, and you are done: FullSend stores that account’s own ' +
+        'credentials, attaches them to this brand only, and starts publishing on schedule. ' +
+        'There is no developer setup to repeat and no merge step.',
       verifiable: true,
     },
   ],
@@ -131,12 +166,13 @@ export const TIKTOK_SETUP: SetupGuide = {
     'A rendered video file is required. Without a video render provider FullSend produces the ' +
       'full production package instead, and you upload the finished video.',
   ],
-  steps: [
+  appSetup: [
     {
       title: 'Register a TikTok developer app',
       detail:
         'At developers.tiktok.com, create an app. Copy the Client Key and Client Secret into ' +
-        'your FullSend environment as TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET.',
+        'your FullSend environment as TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET. One app ' +
+        'serves every brand.',
       href: 'https://developers.tiktok.com/apps',
       verifiable: true,
     },
@@ -174,11 +210,14 @@ export const TIKTOK_SETUP: SetupGuide = {
       waitTime: '2–4 weeks',
       verifiable: false,
     },
+  ],
+  perAccount: [
     {
-      title: 'Connect your account in FullSend',
+      title: 'Press Connect TikTok',
       detail:
-        'FullSend → Accounts → Connect TikTok. FullSend reads which privacy levels your account ' +
-        'actually offers and picks the right one for every post.',
+        'FullSend → Accounts → Connect TikTok, signed in as the account this brand posts from. ' +
+        'FullSend reads which privacy levels that account actually offers and picks the right ' +
+        'one for every post.',
       verifiable: true,
     },
   ],

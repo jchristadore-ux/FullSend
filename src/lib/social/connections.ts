@@ -16,6 +16,7 @@ import { logger } from '../logger';
 import type { ConnectionStatus, Platform, Project, SocialAccount, Uuid } from '../types';
 import { getAdapter } from './registry';
 import { platformLabel } from '../platform-labels';
+import { withoutSecrets } from './account-view';
 import type { AccountInfo, TokenSet } from './types';
 
 const log = logger('connections');
@@ -35,6 +36,15 @@ export async function storeTokens(
   const patch = {
     access_token_encrypted: encryptSecret(tokens.accessToken, aad),
     refresh_token_encrypted: tokens.refreshToken ? encryptSecret(tokens.refreshToken, aad) : null,
+    /*
+     * The account-scoped credential — a Facebook Page token, under Facebook
+     * Login. Encrypted under the same AAD as the user token, so it is bound to
+     * this account and this project: a row lifted into another brand's project
+     * decrypts to nothing.
+     */
+    platform_token_encrypted: tokens.platformToken
+      ? encryptSecret(tokens.platformToken, aad)
+      : null,
     expires_at: tokens.expiresAt?.toISOString() ?? null,
     refresh_expires_at: tokens.refreshExpiresAt?.toISOString() ?? null,
     scopes: tokens.scopes,
@@ -71,6 +81,9 @@ export async function loadTokens(
       refreshToken: row.refresh_token_encrypted
         ? decryptSecret(row.refresh_token_encrypted, aad)
         : null,
+      platformToken: row.platform_token_encrypted
+        ? decryptSecret(row.platform_token_encrypted, aad)
+        : null,
       expiresAt: row.expires_at ? new Date(row.expires_at) : null,
       refreshExpiresAt: row.refresh_expires_at ? new Date(row.refresh_expires_at) : null,
       scopes: row.scopes,
@@ -87,6 +100,18 @@ export async function loadTokens(
 
 /* ── Connect / disconnect ───────────────────────────────────────────────── */
 
+/**
+ * Attaches an authorized account to a brand.
+ *
+ * One Meta application serves every brand FullSend runs, so this is the point
+ * where "which application" stops mattering and "which account, for which
+ * brand" starts. Three things are true on the way out, and each of them is
+ * asserted here rather than assumed downstream:
+ *
+ *   • the credential is in the vault, encrypted and bound to this account;
+ *   • nothing secret is left in `platform_metadata`, which reaches browsers;
+ *   • this account is not already publishing for a different brand.
+ */
 export async function completeConnection(
   scope: TenantScope,
   project: Project,
@@ -95,6 +120,19 @@ export async function completeConnection(
   info: AccountInfo,
 ): Promise<SocialAccount> {
   const existing = await getSocialAccount(scope, project.id, platform);
+  await assertNotConnectedElsewhere(scope, project, platform, info, existing?.id ?? null);
+
+  /*
+   * The account-scoped credential travels with the token set from here on,
+   * never in the metadata blob. `metadata` is stored on a row that the
+   * accounts API returns to the browser; a Page token in it is a published
+   * credential, whatever anybody intended.
+   */
+  const vaulted: TokenSet = {
+    ...tokens,
+    platformToken: info.platformToken ?? tokens.platformToken ?? null,
+  };
+
   const patch = {
     external_id: info.externalId,
     username: info.username,
@@ -103,7 +141,7 @@ export async function completeConnection(
     status: 'connected' as ConnectionStatus,
     status_detail: null,
     granted_scopes: tokens.scopes,
-    platform_metadata: info.metadata,
+    platform_metadata: withoutSecrets(info.metadata),
     followers: info.followers,
     last_checked_at: nowIso(),
   };
@@ -118,7 +156,7 @@ export async function completeConnection(
         ...patch,
       });
 
-  await storeTokens(scope, account, tokens);
+  await storeTokens(scope, account, vaulted);
   await audit(scope, {
     user_id: project.user_id,
     project_id: project.id,
@@ -140,6 +178,59 @@ export async function completeConnection(
 
   log.info('platform connected', { project: project.id, platform, username: info.username });
   return account;
+}
+
+/**
+ * Refuses to connect an account that already belongs to another brand.
+ *
+ * Two projects publishing to one Instagram account is not a configuration
+ * anybody asks for on purpose, and it is indistinguishable from the mistake it
+ * usually is: connecting during onboarding while signed in to the wrong
+ * account. Left alone, both brands' calendars publish to the same feed, and
+ * the cross-project guard cannot catch it because each post really is going to
+ * its own project's account.
+ *
+ * A *disconnected* row elsewhere is not a conflict — that is a brand that gave
+ * the account up, and taking it over is the point.
+ */
+async function assertNotConnectedElsewhere(
+  scope: TenantScope,
+  project: Project,
+  platform: Platform,
+  info: AccountInfo,
+  allowAccountId: Uuid | null,
+): Promise<void> {
+  const sameAccount = await db().find(systemScope('connection conflict check'), 'social_accounts', {
+    where: { platform, external_id: info.externalId },
+  });
+  const conflict = sameAccount.find(
+    (a) =>
+      a.id !== allowAccountId &&
+      a.project_id !== project.id &&
+      a.status !== 'disconnected',
+  );
+  if (!conflict) return;
+
+  const other = await db().get(systemScope('connection conflict check'), 'projects', conflict.project_id);
+  log.warn('refused a second brand on one account', {
+    platform,
+    externalId: info.externalId,
+    project: project.id,
+    heldBy: conflict.project_id,
+  });
+  throw new FullSendError(
+    'account_already_connected',
+    `@${info.username} is already connected to ${other?.name ?? 'another project'} in FullSend`,
+    {
+      status: 409,
+      retryable: false,
+      remedy:
+        `One Instagram account publishes for one brand. Disconnect it from ${other?.name ?? 'the other project'} ` +
+        `first if you mean to move it to ${project.name}, or sign in to the account that belongs to ` +
+        `${project.name} and connect that one instead.`,
+      meta: { heldByProject: conflict.project_id },
+    },
+  );
 }
 
 export async function disconnect(

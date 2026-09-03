@@ -11,6 +11,7 @@ import { systemAnalyzeProduct } from '../analysis/analyze';
 import { buildStrategy, ensureBrandProfile } from '../strategy/build';
 import { collectAnalytics } from '../analytics/collect';
 import { optimize } from '../optimizer/optimize';
+import { regenerateCreative } from '../creative/pipeline';
 import { scheduleContent } from '../scheduler/schedule';
 import { publishScheduledPost } from '../publish/publish';
 import { checkAllConnections } from '../social/connections';
@@ -107,7 +108,26 @@ const handlers: Record<JobType, Handler> = {
     }
     return { ...result, batch: batchIndex, emptyStreak, nextBatchQueued };
   },
-  generate_creative: async (job) => { const scope = systemScope('job:generate_creative'); const item = await db().get(scope, 'content_items', String(job.payload.contentItemId)); if (!item) throw new Error('Content item not found'); return { contentId: item.id, assets: item.creative_asset_ids.length, note: 'Creative is materialized during content generation before scheduling.' }; },
+  /*
+   * Re-render one post's creative.
+   *
+   * This used to report the asset count and call it a day, which made it
+   * useless for the one case it is needed in: a post whose creative failed.
+   * It now actually re-renders, and reports the outcome rather than the
+   * absence of one — a failed render throws, so the job carries the failure
+   * instead of succeeding over it.
+   */
+  generate_creative: async (job) => {
+    const scope = systemScope('job:generate_creative');
+    const outcome = await regenerateCreative(scope, String(job.payload.contentItemId));
+    if (outcome.failed) {
+      throw new FullSendError('creative_failed', outcome.error ?? 'Creative generation failed', {
+        retryable: false,
+        remedy: 'Check the Control Room: this is usually storage or the creative renderer, not this post.',
+      });
+    }
+    return { contentId: outcome.item.id, assets: outcome.assets.length };
+  },
   quality_control: async (job) => ({ projectId: String(job.payload.projectId), skipped: 'Quality control is executed as part of the content checkpoint.' }),
   schedule_content: async (job) => { const scope = systemScope('job:schedule_content'); const projectId = String(job.payload.projectId); const project = await db().get(scope, 'projects', projectId); if (!project) throw new Error(`Project ${projectId} not found`); const approved = await db().find(scope, 'content_items', { where: { project_id: projectId, status: 'approved' } }); const result = await scheduleContent(scope, project, approved); return { scheduled: result.scheduled.length, skipped: result.skipped.length }; },
   /*

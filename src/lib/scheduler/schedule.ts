@@ -5,7 +5,7 @@ import { db, getSettings, getSocialAccount, listCreativeFor, listScheduled } fro
 import { FullSendError } from '../errors';
 import { newId, nowIso } from '../ids';
 import { logger } from '../logger';
-import { ensurePublicCreative } from '../creative/public-asset';
+import { ensurePublicCreative } from '../creative/media';
 import { planSlots, type Slot } from '../content/mix';
 import type { ContentItem, ContentStatus, MarketingStrategy, Platform, Project, ScheduledPost, Uuid } from '../types';
 const log = logger('scheduler');
@@ -46,9 +46,16 @@ export async function scheduleContent(scope: TenantScope, project: Project, item
     if (item.platform !== 'instagram') { skipped.push({ contentId: item.id, reason: 'Instagram is the only active production platform' }); continue; }
     if (item.status !== 'approved') { skipped.push({ contentId: item.id, reason: item.status === 'review_required' ? 'Held for human review by quality control' : item.status === 'approval_required' ? 'Waiting on your approval' : `Status is ${item.status}` }); continue; }
     if (!item.scheduled_for) { skipped.push({ contentId: item.id, reason: 'No scheduled time set' }); continue; }
+    /*
+     * A post whose creative failed is not a post. It has copy, it has a slot,
+     * and it would have gone out as an empty image — which is how thirteen
+     * blank posts reached a real calendar. The generation state says so
+     * explicitly; the asset check below is the second line of defence.
+     */
+    if (item.generation_state === 'failed') { skipped.push({ contentId: item.id, reason: item.generation_error ?? 'The creative for this post could not be produced' }); continue; }
     const assets = await listCreativeFor(scope, project.id, item.id); if (assets.length === 0) { skipped.push({ contentId: item.id, reason: 'Creative is not available yet' }); continue; }
     if (env.nodeEnv !== 'test') {
-      try { for (const asset of assets) { const ready = await ensurePublicCreative(asset); if (ready.url !== asset.url || ready.storage_path !== asset.storage_path || ready.mime_type !== asset.mime_type) await db().update(scope, 'creative_assets', asset.id, { url: ready.url, storage_path: ready.storage_path, mime_type: ready.mime_type }); } }
+      try { for (const asset of assets) await ensurePublicCreative(scope, asset); }
       catch (e) { skipped.push({ contentId: item.id, reason: e instanceof Error ? e.message : String(e) }); continue; }
     }
     /*

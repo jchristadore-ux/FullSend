@@ -10,6 +10,7 @@ import 'server-only';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { env } from '../env';
 import { forbidden, FullSendError, notFound } from '../errors';
+import { logger } from '../logger';
 import type { Job, Uuid } from '../types';
 import {
   type ClaimOptions,
@@ -21,6 +22,8 @@ import {
   type TenantScope,
 } from './store';
 
+const log = logger('db.supabase');
+
 /**
  * How far down the queue a single claim will look for something it can take.
  *
@@ -29,6 +32,9 @@ import {
  * the first row that will not budge — stops the whole deployment.
  */
 export const CLAIM_CANDIDATES = 10;
+
+/** How many unknown columns one write will shed before giving up. */
+const MAX_COLUMN_RETRIES = 4;
 
 /** A tenant restriction as plain data, so it never travels as a query builder. */
 type ScopeFilter =
@@ -48,6 +54,30 @@ export function isSchemaMissing(error: { message?: string; code?: string }): boo
     m.includes('could not find the table') ||
     m.includes('schema cache')
   );
+}
+
+/**
+ * The column PostgREST says it cannot find, or null.
+ *
+ * A deployment ships before its migration is applied — that ordering is not a
+ * mistake to design away, it is how every deploy works: the code arrives, then
+ * an admin applies the pending migration. Until then a write carrying a new
+ * column is rejected outright, which would take down content generation for
+ * every project over a column that only records progress.
+ *
+ * PGRST204 names the column in its message, so the write can be retried
+ * without it. That is a narrow, deliberate degradation: the row is still
+ * written, the new field is simply absent until the migration lands, and the
+ * Control Room already reports migrations as pending.
+ */
+export function missingColumn(error: { message?: string; code?: string }): string | null {
+  if (error.code && error.code !== 'PGRST204' && error.code !== '42703') return null;
+  const message = error.message ?? '';
+  const match =
+    /could not find the '([^']+)' column/i.exec(message) ??
+    /column "([^"]+)" of relation/i.exec(message) ??
+    /column ([a-z0-9_]+) does not exist/i.exec(message);
+  return match ? match[1] : null;
 }
 
 export class SupabaseStore implements Store {
@@ -182,15 +212,45 @@ export class SupabaseStore implements Store {
     });
   }
 
+  /**
+   * Removes a column the database does not have yet, once, and says so loudly.
+   *
+   * Returns null when the failure is anything else, so every other error still
+   * travels unchanged. Nothing here is silent: a dropped column is a warning
+   * with the table and column named, because the fix is a pending migration
+   * and somebody has to know to apply it.
+   */
+  private dropMissing(
+    table: TableName,
+    payload: Record<string, unknown>,
+    error: { message?: string; code?: string },
+  ): Record<string, unknown> | null {
+    const column = missingColumn(error);
+    if (!column || !(column in payload)) return null;
+    log.warn('writing without a column this database does not have yet', {
+      table,
+      column,
+      remedy: 'Apply the pending migrations from the Control Room.',
+    });
+    const next = { ...payload };
+    delete next[column];
+    return next;
+  }
+
   async insert<K extends TableName>(
     scope: TenantScope,
     table: K,
     row: Tables[K],
   ): Promise<Tables[K]> {
     await this.assertWriteAccess(scope, table, row as unknown as Record<string, unknown>);
-    const { data, error } = await this.client.from(table).insert(row).select().single();
-    if (error) throw this.wrap(error, table);
-    return data as Tables[K];
+    let payload = row as unknown as Record<string, unknown>;
+    for (let attempt = 0; ; attempt++) {
+      const { data, error } = await this.client.from(table).insert(payload).select().single();
+      if (!error) return data as Tables[K];
+      const dropped = attempt < MAX_COLUMN_RETRIES ? this.dropMissing(table, payload, error) : null;
+      if (!dropped) throw this.wrap(error, table);
+      payload = dropped;
+    }
   }
 
   async insertMany<K extends TableName>(
@@ -269,14 +329,18 @@ export class SupabaseStore implements Store {
     // Read first so the tenant check runs against stored ownership, not the patch.
     const existing = await this.get(scope, table, id);
     if (!existing) throw notFound(table);
-    let q = this.client
-      .from(table)
-      .update(patch as Record<string, unknown>)
-      .eq('id', id);
-    q = this.applyScope(q, await this.scopeFilter(scope, table));
-    const { data, error } = await q.select().single();
-    if (error) throw this.wrap(error, table);
-    return data as Tables[K];
+    const filter = await this.scopeFilter(scope, table);
+    let payload = patch as Record<string, unknown>;
+    for (let attempt = 0; ; attempt++) {
+      let q = this.client.from(table).update(payload).eq('id', id);
+      q = this.applyScope(q, filter);
+      const { data, error } = await q.select().single();
+      if (!error) return data as Tables[K];
+      const dropped = attempt < MAX_COLUMN_RETRIES ? this.dropMissing(table, payload, error) : null;
+      if (!dropped) throw this.wrap(error, table);
+      if (Object.keys(dropped).length === 0) return existing;
+      payload = dropped;
+    }
   }
 
   async remove<K extends TableName>(scope: TenantScope, table: K, id: Uuid): Promise<void> {

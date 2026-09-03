@@ -2,35 +2,53 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import type { SetupGuide } from '@/lib/social/setup-guides';
+import type { SetupGuide, SetupStep } from '@/lib/social/setup-guides';
 import type { PlatformStatus } from '@/lib/social/registry';
-import type { SocialAccount } from '@/lib/types';
+import type { PublicSocialAccount } from '@/lib/social/account-view';
 import { platformLabel } from '@/lib/platform-labels';
 
 interface PlatformRow extends PlatformStatus {
-  account: SocialAccount | null;
+  account: PublicSocialAccount | null;
   guide: SetupGuide | null;
+}
+
+/** One eligible account, offered when a login can reach more than one. */
+export interface AccountCandidate {
+  externalId: string;
+  username: string;
+  displayName: string | null;
+  followers: number;
 }
 
 /**
  * The Accounts page.
  *
- * Where a platform needs developer setup that no API can do for the user, the
- * full step list is right here with the values to paste — the best possible
- * handoff, rather than a dead "coming soon".
+ * The shape of this screen is the architecture stated out loud: one
+ * application, set up once, and then a Connect button per brand. The developer
+ * runbook is still here — somebody has to do it the first time — but it is
+ * folded away and labelled as what it is, so the second brand does not read it
+ * as a list of things to do again.
  */
 export function AccountsView({
   projectId,
+  projectName,
   platforms,
   values,
   storageReady,
   notice,
 }: {
   projectId: string;
+  projectName: string;
   platforms: PlatformRow[];
   values: Record<string, string>;
   storageReady: boolean;
-  notice: { connected: string | null; error: string | null; reconnect: string | null };
+  notice: {
+    connected: string | null;
+    error: string | null;
+    reconnect: string | null;
+    choosePlatform: string | null;
+    candidates: AccountCandidate[];
+  };
 }) {
   const router = useRouter();
   const [open, setOpen] = useState<string | null>(notice.reconnect ?? null);
@@ -53,6 +71,10 @@ export function AccountsView({
     }
   }
 
+  const connectHref = (platform: string, externalId?: string) =>
+    `/api/accounts/${platform}/connect?project=${projectId}` +
+    (externalId ? `&account=${encodeURIComponent(externalId)}` : '');
+
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 sm:px-8 sm:py-10">
       <span className="label">Accounts</span>
@@ -68,6 +90,44 @@ export function AccountsView({
       {notice.error && (
         <div className="mt-5 border border-fail/50 bg-fail/10 px-4 py-3">
           <p className="text-sm text-fail">{notice.error}</p>
+        </div>
+      )}
+
+      {/*
+        More than one eligible account, so FullSend asked instead of guessing.
+        Picking wrong here publishes one brand's calendar to another brand's
+        followers, which is not a mistake that can be taken back.
+      */}
+      {notice.choosePlatform && notice.candidates.length > 0 && (
+        <div className="mt-5 border border-orange/50 bg-orange/5 px-4 py-4">
+          <p className="font-display text-sm font-bold tracking-tight text-mist">
+            Which account should {projectName} publish to?
+          </p>
+          <p className="mt-1 text-sm text-dim">
+            This login can reach more than one Instagram account. FullSend will not choose for you
+            — the wrong one posts this brand&apos;s content to someone else&apos;s followers.
+          </p>
+          <div className="mt-4 space-y-2">
+            {notice.candidates.map((c) => (
+              <a
+                key={c.externalId}
+                href={connectHref(notice.choosePlatform!, c.externalId)}
+                className="flex items-center justify-between gap-3 border border-edge px-3 py-2.5 transition-colors hover:border-orange"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate font-display text-sm font-bold text-mist">
+                    @{c.username || c.externalId}
+                  </span>
+                  {c.displayName && (
+                    <span className="block truncate text-xs text-dim">{c.displayName}</span>
+                  )}
+                </span>
+                <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-orange">
+                  Connect
+                </span>
+              </a>
+            ))}
+          </div>
         </div>
       )}
 
@@ -112,7 +172,9 @@ export function AccountsView({
                     </p>
                   ) : (
                     <p className="mt-1 text-sm text-dim">
-                      {p.configured ? 'Not connected' : 'Developer setup required first'}
+                      {p.configured
+                        ? `Not connected to ${projectName}. The FullSend app is already set up — this is one click.`
+                        : 'One-time application setup required first'}
                     </p>
                   )}
                 </div>
@@ -121,7 +183,7 @@ export function AccountsView({
                   {p.configured ? (
                     <>
                       <a
-                        href={`/api/accounts/${p.platform}/connect?project=${projectId}`}
+                        href={connectHref(p.platform, connected ? account!.external_id : undefined)}
                         className="btn-send !px-4 !py-2 text-xs"
                       >
                         {connected || needsAttention
@@ -177,11 +239,38 @@ export function AccountsView({
 
               {p.guide && (
                 <div className="px-5 py-4">
+                  {/*
+                    What a *new brand* has to do, always visible and always
+                    short. The developer runbook underneath is the one-time
+                    application setup, and saying so is the point: the second
+                    account is not a second setup.
+                  */}
+                  <p className="label">Connecting {projectName}</p>
+                  <ol className="mt-2 space-y-2">
+                    {p.guide.perAccount.map((step, i) => (
+                      <li key={step.title} className="flex gap-3">
+                        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm bg-charcoal-raised font-mono text-[10px] font-bold text-orange">
+                          {i + 1}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block font-display text-sm font-bold tracking-tight text-mist">
+                            {step.title}
+                          </span>
+                          <span className="block text-[13px] leading-relaxed text-dim">
+                            {step.detail}
+                          </span>
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+
                   <button
                     onClick={() => setOpen(open === p.platform ? null : p.platform)}
-                    className="btn-quiet text-xs"
+                    className="btn-quiet mt-4 text-xs"
                   >
-                    {open === p.platform ? '▾' : '▸'} Developer setup ({p.guide.steps.length} steps)
+                    {open === p.platform ? '▾' : '▸'} One-time application setup (
+                    {p.guide.appSetup.length} steps
+                    {p.configured ? ', already done for this deployment' : ''})
                   </button>
 
                   {open === p.platform && (
@@ -192,48 +281,8 @@ export function AccountsView({
                       </p>
 
                       <ol className="mt-5 space-y-0">
-                        {p.guide.steps.map((step, i) => (
-                          <li key={step.title} className="border-t border-edge py-4">
-                            <div className="flex items-start gap-3">
-                              <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-sm bg-charcoal-raised font-mono text-[11px] font-bold text-orange">
-                                {i + 1}
-                              </span>
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-baseline gap-2">
-                                  <h3 className="font-display text-sm font-bold tracking-tight text-mist">
-                                    {step.title}
-                                  </h3>
-                                  {step.waitTime && (
-                                    <span className="font-mono text-[10px] uppercase tracking-wider text-warn">
-                                      takes {step.waitTime}
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="mt-1 text-sm leading-relaxed text-dim">
-                                  {step.detail}
-                                </p>
-
-                                {step.href && (
-                                  <a
-                                    href={step.href}
-                                    target="_blank"
-                                    rel="noreferrer noopener"
-                                    className="mt-2 inline-block font-mono text-[11px] text-orange hover:underline"
-                                  >
-                                    Open →
-                                  </a>
-                                )}
-
-                                {step.copyValues?.map((cv) => (
-                                  <CopyRow
-                                    key={cv.valueKey}
-                                    label={cv.label}
-                                    value={values[cv.valueKey] ?? ''}
-                                  />
-                                ))}
-                              </div>
-                            </div>
-                          </li>
+                        {p.guide.appSetup.map((step, i) => (
+                          <Step key={step.title} step={step} index={i} values={values} />
                         ))}
                       </ol>
                     </div>
@@ -247,10 +296,58 @@ export function AccountsView({
 
       <p className="mt-8 font-mono text-[11px] leading-relaxed text-dimmer">
         FullSend uses official platform APIs only. It never asks for your password, never scrapes,
-        and never automates a browser to get around platform limits. Tokens are encrypted at rest
-        and never sent to your browser.
+        and never automates a browser to get around platform limits. Every account keeps its own
+        credentials, encrypted at rest, attached to one brand and never sent to your browser.
       </p>
     </div>
+  );
+}
+
+function Step({
+  step,
+  index,
+  values,
+}: {
+  step: SetupStep;
+  index: number;
+  values: Record<string, string>;
+}) {
+  return (
+    <li className="border-t border-edge py-4">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-sm bg-charcoal-raised font-mono text-[11px] font-bold text-orange">
+          {index + 1}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-baseline gap-2">
+            <h3 className="font-display text-sm font-bold tracking-tight text-mist">
+              {step.title}
+            </h3>
+            {step.waitTime && (
+              <span className="font-mono text-[10px] uppercase tracking-wider text-warn">
+                takes {step.waitTime}
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-sm leading-relaxed text-dim">{step.detail}</p>
+
+          {step.href && (
+            <a
+              href={step.href}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="mt-2 inline-block font-mono text-[11px] text-orange hover:underline"
+            >
+              Open →
+            </a>
+          )}
+
+          {step.copyValues?.map((cv) => (
+            <CopyRow key={cv.valueKey} label={cv.label} value={values[cv.valueKey] ?? ''} />
+          ))}
+        </div>
+      </div>
+    </li>
   );
 }
 

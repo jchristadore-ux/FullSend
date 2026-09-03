@@ -311,6 +311,8 @@ describe('FullSend end-to-end chain', () => {
       video_plan: null,
       slides: null,
       creative_asset_ids: [],
+    generation_state: 'complete' as const,
+    generation_error: null,
       status: 'approved',
       dedup_hash: 'unique-hash-1',
       qc: null,

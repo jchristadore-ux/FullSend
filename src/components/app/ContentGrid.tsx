@@ -21,6 +21,8 @@ export interface ContentCard {
   videoStatus: string | null;
   videoSeconds: number | null;
   slides: number;
+  generationState: string;
+  generationError: string | null;
   previews: string[];
 }
 
@@ -96,13 +98,32 @@ export function ContentGrid({
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {items.map((item) => (
             <article key={item.id} className="panel flex flex-col overflow-hidden">
-              {item.previews[0] && (
+              {item.previews[0] ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={item.previews[0]}
                   alt=""
                   className="aspect-[4/5] w-full border-b border-edge object-cover"
                 />
+              ) : (
+                /*
+                 * No visual, said out loud.
+                 *
+                 * This card used to render the copy with nothing above it,
+                 * which reads as a design choice rather than a failure — and
+                 * that is exactly how a run of posts with no creative at all
+                 * went unnoticed. A post that is missing its picture now says
+                 * so, in the space the picture would have occupied.
+                 */
+                <div className="flex aspect-[4/5] w-full flex-col items-start justify-center gap-2 border-b border-edge bg-fail/5 px-4">
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-fail">
+                    {item.generationState === 'failed' ? 'Creative failed' : 'No creative yet'}
+                  </p>
+                  <p className="line-clamp-4 text-[11px] leading-snug text-dim">
+                    {item.generationError ??
+                      'This post has copy but no image. FullSend will not publish it until one exists.'}
+                  </p>
+                </div>
               )}
 
               <div className="flex flex-1 flex-col p-4">

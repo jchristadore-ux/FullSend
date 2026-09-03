@@ -314,6 +314,35 @@ export interface Campaign {
 
 /* ── Content ────────────────────────────────────────────────────────────── */
 
+/**
+ * How far a post has actually got.
+ *
+ * `status` answers "what should happen to this post next" — draft, waiting on
+ * approval, scheduled, published. It was also being asked a question it cannot
+ * answer: *is this post finished being made?* A post whose copy was written and
+ * whose creative silently failed carried a perfectly ordinary status, so it
+ * looked finished, scheduled itself, and presented an empty card as a success.
+ *
+ * These states are the answer to that second question, and they are kept
+ * separate because the two genuinely differ: a complete post can be held for
+ * review, and an approved post can have no creative at all.
+ */
+export const GENERATION_STATES = [
+  'pending',
+  'generating_copy',
+  'copy_complete',
+  'generating_creative',
+  'creative_complete',
+  'complete',
+  'failed',
+] as const;
+export type GenerationState = (typeof GENERATION_STATES)[number];
+
+/** True when everything a post needs to publish has actually been produced. */
+export function isGenerationComplete(state: GenerationState | null | undefined): boolean {
+  return state === 'complete' || state === undefined || state === null;
+}
+
 export type ContentStatus =
   | 'draft'
   | 'approval_required'
@@ -365,6 +394,14 @@ export interface ContentItem {
   slides: { headline: string; body: string }[] | null;
   creative_asset_ids: Uuid[];
   status: ContentStatus;
+  /**
+   * Where this post is in its own making. Defaults to `complete` for rows
+   * written before the lifecycle existed — they have creative or they do not,
+   * and pretending otherwise would mark the whole back catalogue as broken.
+   */
+  generation_state: GenerationState;
+  /** Why generation failed, in the founder's words rather than a stack trace. */
+  generation_error: string | null;
   /** Stable fingerprint used to stop the machine repeating itself. */
   dedup_hash: string;
   qc: QcResult | null;
@@ -452,6 +489,13 @@ export interface OAuthToken {
   /** AES-256-GCM ciphertext. Never returned to a client. */
   access_token_encrypted: string;
   refresh_token_encrypted: string | null;
+  /**
+   * A second, account-scoped credential — a Facebook Page token under Facebook
+   * Login. It lived in `social_accounts.platform_metadata` until that column
+   * was found to be reaching browsers; it belongs here, encrypted, beside the
+   * token it accompanies.
+   */
+  platform_token_encrypted: string | null;
   expires_at: IsoDate | null;
   refresh_expires_at: IsoDate | null;
   scopes: string[];
