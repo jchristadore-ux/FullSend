@@ -228,6 +228,26 @@ export function ContentDetail({
               ) : null,
             )
           )}
+
+          {/*
+            Available whether or not creative exists.
+
+            A post that already has an image is exactly the case this had no
+            answer for: the thirteen posts generated before the renderer could
+            draw text each carry a perfectly valid file with nothing in it, and
+            a button that only appears when creative is *missing* cannot reach
+            any of them. Re-rendering replaces the assets and the new ones are
+            rasterised fresh, with fonts, on the way to Instagram.
+          */}
+          {creative.length > 0 && !locked && (
+            <button
+              onClick={retryCreative}
+              disabled={busy}
+              className="btn-ghost w-full !py-2 text-[10px]"
+            >
+              {busy ? '…' : 'REGENERATE CREATIVE'}
+            </button>
+          )}
         </div>
 
         {/* Copy. */}
