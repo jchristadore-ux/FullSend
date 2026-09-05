@@ -14,7 +14,7 @@ const ITEMS = [
   { href: '/app/content', label: 'Content', short: 'Content', icon: '▣', mobile: true },
   { href: '/app/analytics', label: 'Analytics', short: 'Stats', icon: '▲', mobile: true },
   { href: '/app/strategy', label: 'Strategy', short: 'Strategy', icon: '◈', mobile: false },
-  { href: '/app/accounts', label: 'Accounts', short: 'Accounts', icon: '⬡', mobile: false },
+  { href: '/app/accounts', label: 'Accounts', short: 'Accounts', icon: '⬡', mobile: true },
   { href: '/app/settings', label: 'Settings', short: 'Settings', icon: '⚙', mobile: false },
 ];
 
@@ -26,7 +26,7 @@ export function AppNav({ variant }: { variant: 'rail' | 'bottom' }) {
   if (variant === 'bottom') {
     const items = ITEMS.filter((i) => i.mobile);
     return (
-      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-4 border-t border-edge bg-void/95 backdrop-blur lg:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-edge bg-void/95 backdrop-blur lg:hidden">
         {items.map((item) => {
           const active = isActive(item.href);
           return (
