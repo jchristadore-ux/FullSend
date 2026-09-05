@@ -7,15 +7,22 @@ import { useEffect, useState } from 'react';
  * the panel reads as a live readout rather than a screenshot.
  */
 
-const ROWS = [
-  { label: 'Content queued', value: '28 posts' },
-  { label: 'Platforms', value: 'Instagram + TikTok' },
-  { label: 'Next post', value: 'Tomorrow — 9:00 AM' },
-  { label: 'Performance', value: '+34% reach this week', tone: 'live' as const },
-  { label: 'AI optimization', value: 'ACTIVE', tone: 'live' as const },
-];
+function rowsFor(platformsLabel: string) {
+  return [
+    { label: 'Content queued', value: '28 posts' },
+    { label: 'Platforms', value: platformsLabel },
+    { label: 'Next post', value: 'Tomorrow — 9:00 AM' },
+    { label: 'Performance', value: '+34% reach this week', tone: 'live' as const },
+    { label: 'AI optimization', value: 'ACTIVE', tone: 'live' as const },
+  ];
+}
 
-export function AutopilotPanel() {
+export function AutopilotPanel({
+  platformsLabel = 'Instagram (TikTok when connected)',
+}: {
+  platformsLabel?: string;
+}) {
+  const ROWS = rowsFor(platformsLabel);
   const [revealed, setRevealed] = useState(0);
 
   useEffect(() => {
@@ -23,7 +30,7 @@ export function AutopilotPanel() {
       setRevealed((n) => (n >= ROWS.length ? n : n + 1));
     }, 260);
     return () => clearInterval(id);
-  }, []);
+  }, [ROWS.length]);
 
   return (
     <div className="panel-raised overflow-hidden shadow-panel">
