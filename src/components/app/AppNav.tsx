@@ -6,15 +6,18 @@ import { usePathname } from 'next/navigation';
 /**
  * One nav definition, two presentations: a rail on desktop and a bottom bar on
  * mobile. The mobile bar carries only what a founder checks from their phone.
+ *
+ * Accounts is primary on mobile so Instagram connect is reachable without
+ * hunting through overflow. Analytics stays on the desktop rail.
  */
 
 const ITEMS = [
   { href: '/app', label: 'Send Center', short: 'Home', icon: '◆', mobile: true },
   { href: '/app/calendar', label: 'Calendar', short: 'Calendar', icon: '▤', mobile: true },
   { href: '/app/content', label: 'Content', short: 'Content', icon: '▣', mobile: true },
-  { href: '/app/analytics', label: 'Analytics', short: 'Stats', icon: '▲', mobile: true },
+  { href: '/app/accounts', label: 'Accounts', short: 'Accounts', icon: '⬡', mobile: true },
+  { href: '/app/analytics', label: 'Analytics', short: 'Stats', icon: '▲', mobile: false },
   { href: '/app/strategy', label: 'Strategy', short: 'Strategy', icon: '◈', mobile: false },
-  { href: '/app/accounts', label: 'Accounts', short: 'Accounts', icon: '⬡', mobile: false },
   { href: '/app/settings', label: 'Settings', short: 'Settings', icon: '⚙', mobile: false },
 ];
 

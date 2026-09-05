@@ -41,8 +41,8 @@ export default async function LoginPage({
 
         <p className="mt-6 text-center font-mono text-[11px] text-dimmer">
           New here?{' '}
-          <Link href="/onboarding" className="text-orange hover:underline">
-            Paste a repo and watch it work →
+          <Link href="/login?next=/onboarding" className="text-orange hover:underline">
+            Sign in, then paste a repo →
           </Link>
         </p>
       </div>
