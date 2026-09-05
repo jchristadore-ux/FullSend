@@ -7,7 +7,7 @@ import { newId, nowIso } from '../ids';
 import { logger } from '../logger';
 import { ensurePublicCreative } from '../creative/media';
 import { planSlots, type Slot } from '../content/mix';
-import type { ContentItem, ContentStatus, MarketingStrategy, Platform, Project, ScheduledPost, Uuid } from '../types';
+import { isGenerationComplete, type ContentItem, type ContentStatus, type MarketingStrategy, type Platform, type Project, type ScheduledPost, type Uuid } from '../types';
 const log = logger('scheduler');
 export const CALENDAR_WINDOWS = [7, 14, 30, 60, 90] as const;
 export type CalendarWindow = (typeof CALENDAR_WINDOWS)[number];
@@ -47,12 +47,21 @@ export async function scheduleContent(scope: TenantScope, project: Project, item
     if (item.status !== 'approved') { skipped.push({ contentId: item.id, reason: item.status === 'review_required' ? 'Held for human review by quality control' : item.status === 'approval_required' ? 'Waiting on your approval' : `Status is ${item.status}` }); continue; }
     if (!item.scheduled_for) { skipped.push({ contentId: item.id, reason: 'No scheduled time set' }); continue; }
     /*
-     * A post whose creative failed is not a post. It has copy, it has a slot,
-     * and it would have gone out as an empty image — which is how thirteen
-     * blank posts reached a real calendar. The generation state says so
-     * explicitly; the asset check below is the second line of defence.
+     * A post that is not finished being made is not a post. It has copy, it
+     * has a slot, and publishing an intermediate or failed state is how blank
+     * posts reach a real calendar. Only finished generation states are allowed
+     * — not merely "not failed". The asset check below is the second line.
      */
-    if (item.generation_state === 'failed') { skipped.push({ contentId: item.id, reason: item.generation_error ?? 'The creative for this post could not be produced' }); continue; }
+    if (!isGenerationComplete(item.generation_state)) {
+      skipped.push({
+        contentId: item.id,
+        reason:
+          item.generation_state === 'failed'
+            ? (item.generation_error ?? 'The creative for this post could not be produced')
+            : `Generation is not finished (${item.generation_state})`,
+      });
+      continue;
+    }
     const assets = await listCreativeFor(scope, project.id, item.id); if (assets.length === 0) { skipped.push({ contentId: item.id, reason: 'Creative is not available yet' }); continue; }
     if (env.nodeEnv !== 'test') {
       try { for (const asset of assets) await ensurePublicCreative(scope, asset); }
