@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth/session';
 import { listProjects } from '@/lib/db/repo';
@@ -10,7 +11,12 @@ export const dynamic = 'force-dynamic';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
-  if (!session) redirect('/login');
+  if (!session) {
+    const h = await headers();
+    const pathname = h.get('x-pathname') || '/app';
+    const next = pathname.startsWith('/') ? pathname : '/app';
+    redirect(`/login?next=${encodeURIComponent(next)}`);
+  }
 
   const projects = await listProjects(session.scope, session.user.id);
   if (projects.length === 0) redirect('/onboarding');

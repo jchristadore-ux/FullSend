@@ -22,7 +22,9 @@ export const GET = route(async ({ session, params }) => {
     where: { content_item_id: item.id },
   });
 
-  return { content: item, creative: assets, scheduled, published };
+  // Never return inline SVG to the client — large and unnecessary for display.
+  const creative = assets.map(({ svg: _omit, ...safe }) => safe);
+  return { content: item, creative, scheduled, published };
 });
 
 /**
