@@ -12,10 +12,10 @@
  * configured is already visible from the sign-in and account screens, so this
  * discloses nothing those do not.
  */
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { env, capabilities } from '@/lib/env';
 import { isSchemaMissing } from '@/lib/db/supabase-store';
-import { queueHealth, type QueueHealth } from '@/lib/jobs/runner';
+import { cronSecretValid, queueHealth, type QueueHealth } from '@/lib/jobs/runner';
 import { fontHealth } from '@/lib/creative/fonts';
 
 export const runtime = 'nodejs';
@@ -244,7 +244,20 @@ async function checkTikTokFile(): Promise<TikTokFile> {
   }
 }
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(req: NextRequest): Promise<NextResponse> {
+  // Unauthenticated: minimal liveness only. Full diagnostics need the cron secret
+  // (Authorization: Bearer … or x-cron-secret) — the detailed payload discloses
+  // which integrations and migrations are missing.
+  const authorized =
+    cronSecretValid(req.headers.get('authorization')) ||
+    cronSecretValid(req.headers.get('x-cron-secret'));
+  if (!authorized) {
+    return NextResponse.json(
+      { ok: true, appUrl: env.appUrl, problems: [] as string[] },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
+
   const [
     supabase,
     schema,
