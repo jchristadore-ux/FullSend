@@ -188,11 +188,11 @@ function Solution() {
             },
             {
               title: 'It has an opinion',
-              body: 'It decides what to post and when, based on what your audience actually responded to last week. It tells you what it decided — it doesn't ask you to decide.',
+              body: 'It decides what to post and when, based on what your audience actually responded to last week. It tells you what it decided — it doesn\'t ask you to decide.',
             },
             {
               title: 'It keeps running',
-              body: 'Generate, schedule, publish, measure, adjust. Every day. Your browser doesn't need to be open, and neither do your eyes.',
+              body: 'Generate, schedule, publish, measure, adjust. Every day. Your browser doesn\'t need to be open, and neither do your eyes.',
             },
           ].map((card) => (
             <div key={card.title} className="bg-charcoal p-7">
