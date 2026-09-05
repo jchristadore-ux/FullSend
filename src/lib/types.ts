@@ -338,9 +338,20 @@ export const GENERATION_STATES = [
 ] as const;
 export type GenerationState = (typeof GENERATION_STATES)[number];
 
-/** True when everything a post needs to publish has actually been produced. */
+/** Finished generation states that may be scheduled or published. */
+export const FINISHED_GENERATION_STATES: ReadonlySet<GenerationState> = new Set([
+  'complete',
+  'creative_complete',
+]);
+
+/**
+ * True when everything a post needs to publish has actually been produced.
+ * Intermediate states (`pending`, `generating_*`, `copy_complete`) are not
+ * finished — only the allowlist below (plus legacy null/undefined rows).
+ */
 export function isGenerationComplete(state: GenerationState | null | undefined): boolean {
-  return state === 'complete' || state === undefined || state === null;
+  if (state === undefined || state === null) return true;
+  return FINISHED_GENERATION_STATES.has(state);
 }
 
 export type ContentStatus =

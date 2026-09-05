@@ -79,9 +79,7 @@ function Hero() {
             </p>
 
             <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:items-center">
-              <Link href="/onboarding" className="btn-send text-base">
-                SEND IT →
-              </Link>
+              <StartLink className="btn-send text-base" />
               <a href="#how" className="btn-ghost text-base">
                 See how it works
               </a>
@@ -190,11 +188,11 @@ function Solution() {
             },
             {
               title: 'It has an opinion',
-              body: 'It decides what to post and when, based on what your audience actually responded to last week. It tells you what it decided — it doesn’t ask you to decide.',
+              body: 'It decides what to post and when, based on what your audience actually responded to last week. It tells you what it decided — it doesn't ask you to decide.',
             },
             {
               title: 'It keeps running',
-              body: 'Generate, schedule, publish, measure, adjust. Every day. Your browser doesn’t need to be open, and neither do your eyes.',
+              body: 'Generate, schedule, publish, measure, adjust. Every day. Your browser doesn't need to be open, and neither do your eyes.',
             },
           ].map((card) => (
             <div key={card.title} className="bg-charcoal p-7">
@@ -251,7 +249,7 @@ const STEPS = [
     n: '04',
     title: 'Connect your accounts.',
     body: 'Connect:',
-    items: ['Instagram', 'TikTok', 'additional platforms as supported'],
+    items: ['Instagram (TikTok when connected)', 'additional platforms as supported'],
   },
   {
     n: '05',
@@ -319,12 +317,9 @@ function BigMessage() {
         <p className="mx-auto mt-8 max-w-2xl font-display text-xl font-bold tracking-tight text-void/80 sm:text-2xl">
           Your app doesn&rsquo;t need another feature right now. It needs attention.
         </p>
-        <Link
-          href="/onboarding"
-          className="mt-10 inline-flex items-center justify-center gap-2 rounded-sm bg-void px-8 py-4 font-display text-lg font-extrabold uppercase tracking-tight text-orange transition-transform duration-150 hover:scale-[1.02] active:translate-y-px"
-        >
+        <StartLink className="mt-10 inline-flex items-center justify-center gap-2 rounded-sm bg-void px-8 py-4 font-display text-lg font-extrabold uppercase tracking-tight text-orange transition-transform duration-150 hover:scale-[1.02] active:translate-y-px">
           FULL SEND →
-        </Link>
+        </StartLink>
       </div>
     </section>
   );
@@ -448,12 +443,11 @@ function Pricing() {
                   </li>
                 ))}
               </ul>
-              <Link
-                href="/onboarding"
+              <StartLink
                 className={tier.highlight ? 'btn-send mt-7 w-full' : 'btn-ghost mt-7 w-full'}
               >
                 {tier.cta}
-              </Link>
+              </StartLink>
             </div>
           ))}
         </div>
@@ -480,9 +474,7 @@ function FinalCta() {
         <p className="mt-6 text-lg text-dim">
           Paste a repo. Watch it figure out your product. Decide if you believe it.
         </p>
-        <Link href="/onboarding" className="btn-send mt-9 text-lg">
-          SEND IT →
-        </Link>
+        <StartLink className="btn-send mt-9 text-lg" />
         <p className="mt-6 font-mono text-xs text-dimmer">
           BUILD ONCE. MARKET FOREVER.
         </p>

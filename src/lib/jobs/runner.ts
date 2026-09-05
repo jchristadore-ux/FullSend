@@ -422,4 +422,4 @@ export async function queueHealth(): Promise<QueueHealth> {
   };
 }
 
-export function cronSecretValid(value: string | null): boolean { const secret = env.jobs.cronSecret; if (!secret || !value) return false; const trimmed = value.trim(); if (trimmed === secret) return true; const prefix = 'Bearer '; return trimmed.startsWith(prefix) && trimmed.slice(prefix.length).trim() === secret; }
+export { cronSecretValid } from './cron-auth';
