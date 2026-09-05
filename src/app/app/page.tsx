@@ -57,6 +57,28 @@ export default async function SendCenter() {
 
       {data.attention.length > 0 && <AttentionBanner items={data.attention} />}
 
+      {data.deadJobs > 0 && (
+        <div className="mt-6 border border-warn/50 bg-warn/10 px-5 py-4">
+          <p className="font-display text-sm font-extrabold uppercase tracking-tight text-warn">
+            Background jobs need attention
+          </p>
+          <p className="mt-1 text-sm text-mist">
+            {data.deadJobs} dead job{data.deadJobs === 1 ? '' : 's'} in the queue
+            {session.user.is_admin ? (
+              <>
+                {' '}
+                —{' '}
+                <Link href="/admin" className="text-orange hover:underline">
+                  open Control Room
+                </Link>
+              </>
+            ) : (
+              '. An admin can clear them in the Control Room.'
+            )}
+          </p>
+        </div>
+      )}
+
       {!data.hasAnalysis && <SetupPrompt href="/onboarding" label="Analyze your repository" />}
       {data.hasAnalysis && !data.strategyApproved && (
         <SetupPrompt href="/app/strategy" label="Approve your strategy to start sending" />

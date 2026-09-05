@@ -82,11 +82,17 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
  * are needed — calling one without the other is the bug this fixes.
  */
 async function refreshSession(req: NextRequest): Promise<NextResponse> {
+  // Expose the matched path to Server Components (e.g. app layout login redirect).
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set('x-pathname', `${req.nextUrl.pathname}${req.nextUrl.search}`);
+
   // Not configured: the app runs on its local dev session instead, and there
   // is nothing to refresh.
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return NextResponse.next();
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return NextResponse.next({ request: { headers: requestHeaders } });
+  }
 
-  let res = NextResponse.next({ request: req });
+  let res = NextResponse.next({ request: { headers: requestHeaders } });
 
   const supabase = createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     cookies: {
@@ -95,7 +101,7 @@ async function refreshSession(req: NextRequest): Promise<NextResponse> {
         // Update the request too, so a page rendered in this same pass reads
         // the refreshed token rather than the one that just expired.
         for (const { name, value } of toSet) req.cookies.set(name, value);
-        res = NextResponse.next({ request: req });
+        res = NextResponse.next({ request: { headers: requestHeaders } });
         for (const { name, value, options } of toSet) res.cookies.set(name, value, options);
       },
     },

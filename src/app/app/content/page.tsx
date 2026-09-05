@@ -4,6 +4,7 @@ import { activeProject } from '@/lib/active-project';
 import { db, listContent } from '@/lib/db/repo';
 import { svgDataUri } from '@/lib/creative/render';
 import { ContentGrid } from '@/components/app/ContentGrid';
+import { generationBlocker } from '@/lib/automation/autopilot';
 import type { ContentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -35,6 +36,7 @@ export default async function ContentPage({
 
   const all = await listContent(session.scope, project.id, { limit: 300 });
   const items = filter ? all.filter((i) => i.status === filter) : all;
+  const blocked = await generationBlocker(session.scope, project);
 
   const counts: Record<string, number> = {};
   for (const i of all) counts[i.status] = (counts[i.status] ?? 0) + 1;
@@ -61,12 +63,6 @@ export default async function ContentPage({
         videoStatus: item.video_plan?.render_status ?? null,
         videoSeconds: item.video_plan?.total_duration_seconds ?? null,
         slides: item.slides?.length ?? 0,
-        /*
-         * Whether this post was actually finished, straight off the row. A
-         * post whose creative failed used to arrive here indistinguishable
-         * from one that worked — same status, same copy, just an empty
-         * `previews` array that the card silently skipped.
-         */
         generationState: item.generation_state ?? 'complete',
         generationError: item.generation_error ?? null,
         previews: assets
@@ -89,6 +85,7 @@ export default async function ContentPage({
         total={all.length}
         activeFilter={filter}
         statuses={STATUSES}
+        blocked={blocked}
       />
     </div>
   );

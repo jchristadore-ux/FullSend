@@ -107,6 +107,7 @@ export function verifyState<T = Record<string, unknown>>(state: string): T {
 /** PKCE pair for TikTok's OAuth, which requires S256. */
 export function createPkcePair(): { verifier: string; challenge: string } {
   const verifier = crypto.randomBytes(48).toString('base64url');
-  const challenge = crypto.createHash('sha256').update(verifier).digest('hex');
+  // S256 challenge must be base64url (RFC 7636), not hex.
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
   return { verifier, challenge };
 }

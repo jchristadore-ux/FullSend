@@ -114,12 +114,18 @@ export async function assertPublishable(
   }
 
   // 4. The post is actually finished. Copy without creative is not a post,
-  //    and publishing one puts an empty image on a real feed. The scheduler
-  //    already refuses these; this is the check on the last path to Instagram.
-  if (content.generation_state === 'failed') {
+  //    and publishing one puts an empty image on a real feed. Allow only
+  //    terminal success states (copy + creative done); anything else fails closed.
+  const generationReady =
+    content.generation_state === 'complete' || content.generation_state === 'creative_complete';
+  if (!generationReady) {
     throw refuse(
-      `The creative for this post was never produced: ${content.generation_error ?? 'unknown reason'}`,
-      'Regenerate the creative from the post, or delete it. FullSend will not publish a post with no visual.',
+      content.generation_state === 'failed'
+        ? `The creative for this post was never produced: ${content.generation_error ?? 'unknown reason'}`
+        : `This post is not ready to publish (generation state: ${content.generation_state})`,
+      content.generation_state === 'failed'
+        ? 'Regenerate the creative from the post, or delete it. FullSend will not publish a post with no visual.'
+        : 'Wait until generation finishes, or regenerate creative from the post page. FullSend only publishes posts whose copy and creative are complete.',
     );
   }
 

@@ -125,7 +125,8 @@ describe('OAuth state', () => {
   it('produces a valid S256 PKCE pair', () => {
     const { verifier, challenge } = createPkcePair();
     expect(verifier.length).toBeGreaterThan(40);
-    expect(challenge).toMatch(/^[0-9a-f]{64}$/);
+    // RFC 7636 S256: BASE64URL(SHA256(verifier)), unpadded
+    expect(challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(createPkcePair().verifier).not.toBe(verifier);
   });
 });

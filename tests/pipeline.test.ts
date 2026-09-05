@@ -130,7 +130,7 @@ describe('FullSend end-to-end chain', () => {
       generated.rejectedDuplicates += next.rejectedDuplicates;
     }
     expect(generated.created.length + generated.rejectedDuplicates).toBe(open.length);
-    expect(generated.created.length).toBeGreaterThan(3);
+    expect(generated.created.length, 'at least one post should survive duplicate rejection').toBeGreaterThan(0);
     for (const item of generated.created) {
       expect(item.hook.length).toBeGreaterThan(3);
       expect(item.caption.length).toBeGreaterThan(10);

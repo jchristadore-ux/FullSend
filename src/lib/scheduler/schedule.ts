@@ -47,12 +47,20 @@ export async function scheduleContent(scope: TenantScope, project: Project, item
     if (item.status !== 'approved') { skipped.push({ contentId: item.id, reason: item.status === 'review_required' ? 'Held for human review by quality control' : item.status === 'approval_required' ? 'Waiting on your approval' : `Status is ${item.status}` }); continue; }
     if (!item.scheduled_for) { skipped.push({ contentId: item.id, reason: 'No scheduled time set' }); continue; }
     /*
-     * A post whose creative failed is not a post. It has copy, it has a slot,
-     * and it would have gone out as an empty image — which is how thirteen
-     * blank posts reached a real calendar. The generation state says so
-     * explicitly; the asset check below is the second line of defence.
+     * Only schedule posts whose copy and creative are finished. Anything still
+     * generating (or failed) is skipped — unfinished creative used to reach a
+     * real calendar as blank images. The asset check below is the second line.
      */
-    if (item.generation_state === 'failed') { skipped.push({ contentId: item.id, reason: item.generation_error ?? 'The creative for this post could not be produced' }); continue; }
+    if (item.generation_state !== 'complete' && item.generation_state !== 'creative_complete') {
+      skipped.push({
+        contentId: item.id,
+        reason:
+          item.generation_state === 'failed'
+            ? (item.generation_error ?? 'The creative for this post could not be produced')
+            : `Generation is not finished (state: ${item.generation_state}). Wait until copy and creative are complete, or regenerate creative.`,
+      });
+      continue;
+    }
     const assets = await listCreativeFor(scope, project.id, item.id); if (assets.length === 0) { skipped.push({ contentId: item.id, reason: 'Creative is not available yet' }); continue; }
     if (env.nodeEnv !== 'test') {
       try { for (const asset of assets) await ensurePublicCreative(scope, asset); }

@@ -15,6 +15,7 @@ import {
   listSocialAccounts,
 } from './db/repo';
 import { nextSend, queueDepth, type CalendarEntry } from './scheduler/schedule';
+import { queueStats } from './jobs/runner';
 import { postPerformance, summarise, type PostPerformance } from './analytics/collect';
 import { currentSendScore } from './automation/weekly-report';
 import { nextMove } from './optimizer/optimize';
@@ -64,6 +65,8 @@ export interface SendCenterData {
   strategyApproved: boolean;
   hasAnalysis: boolean;
   aiCostUsd: number;
+  /** System-wide dead jobs from queueStats — for ops visibility on Send Center. */
+  deadJobs: number;
 }
 
 export async function loadSendCenter(
@@ -85,6 +88,7 @@ export async function loadSendCenter(
     analysis,
     errors,
     spend,
+    queue,
   ] = await Promise.all([
     listSocialAccounts(scope, project.id),
     summarise(scope, project.id, since),
@@ -103,6 +107,7 @@ export async function loadSendCenter(
       limit: 5,
     }),
     aiSpend(scope, { projectId: project.id }),
+    queueStats(),
   ]);
 
   const published = await listPublished(scope, project.id, 6);
@@ -184,6 +189,7 @@ export async function loadSendCenter(
     strategyApproved: Boolean(strategy?.approved),
     hasAnalysis: Boolean(analysis),
     aiCostUsd: spend.total,
+    deadJobs: queue.dead,
   };
 }
 

@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
 import { requireSession } from '@/lib/auth/session';
 import { activeProject } from '@/lib/active-project';
 import {
@@ -11,6 +12,7 @@ import {
 } from '@/lib/db/repo';
 import { StrategyView } from '@/components/app/StrategyView';
 import { BrandIdentityPanel } from '@/components/app/BrandIdentityPanel';
+import { StrategyWaiting } from '@/components/app/StrategyWaiting';
 import { identityFrom } from '@/lib/brand/identity';
 
 export const dynamic = 'force-dynamic';
@@ -31,24 +33,28 @@ export default async function StrategyPage() {
   ]);
 
   if (!strategy) {
+    if (analysis) return <StrategyWaiting />;
     return (
       <div className="mx-auto max-w-3xl px-4 py-16 sm:px-8">
         <span className="label">Marketing Strategy</span>
         <h1 className="mt-3 font-display text-3xl font-extrabold tracking-crush text-mist">
           Not built yet.
         </h1>
-        <p className="mt-3 text-dim">
-          {analysis
-            ? 'The analysis is done — the strategy is still being generated. Give it a moment and refresh.'
-            : 'FullSend needs to analyse your repository first.'}
+        <p className="mt-3 text-dim">FullSend needs to analyse your repository first.</p>
+        <p className="mt-6">
+          <Link href="/onboarding" className="btn-send !px-4 !py-2 text-xs">
+            ANALYSE THE REPO →
+          </Link>
+        </p>
+        <p className="mt-4">
+          <Link href="/app" className="font-mono text-[11px] text-orange hover:underline">
+            Or open the Send Center →
+          </Link>
         </p>
       </div>
     );
   }
 
-  // What the repository was read to say about how this product looks. Shown
-  // alongside the voice, because the two together are the brand: a founder who
-  // can see the source of a wrong colour can correct it in one pass.
   const identity = identityFrom(analysis);
 
   return (

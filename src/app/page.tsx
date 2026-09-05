@@ -3,18 +3,30 @@ import { FullSendLockup } from '@/components/brand/Logo';
 import { HeroFlow } from '@/components/marketing/HeroFlow';
 import { AutopilotPanel } from '@/components/marketing/AutopilotPanel';
 import { SignInLink, StartLink } from '@/components/marketing/SessionLinks';
+import { capabilities } from '@/lib/env';
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  const caps = capabilities();
+  const platformsLabel = caps.tiktok
+    ? 'Instagram + TikTok'
+    : 'Instagram (TikTok when connected)';
+  const connectItems = caps.tiktok
+    ? ['Instagram', 'TikTok', 'additional platforms as supported']
+    : ['Instagram', 'TikTok when connected', 'additional platforms as supported'];
+  const sendTierPlatforms = caps.tiktok
+    ? 'Instagram + TikTok'
+    : 'Instagram (TikTok when connected)';
+
   return (
     <main className="min-h-screen bg-void">
       <Nav />
-      <Hero />
+      <Hero platformsLabel={platformsLabel} />
       <Problem />
       <Solution />
-      <HowItWorks />
+      <HowItWorks connectItems={connectItems} />
       <BigMessage />
-      <Autopilot />
-      <Pricing />
+      <Autopilot platformsLabel={platformsLabel} />
+      <Pricing sendTierPlatforms={sendTierPlatforms} />
       <FinalCta />
       <Footer />
     </main>
@@ -47,7 +59,7 @@ function Nav() {
 
 /* ── Hero ───────────────────────────────────────────────────────────────── */
 
-function Hero() {
+function Hero({ platformsLabel }: { platformsLabel: string }) {
   return (
     <section className="relative overflow-hidden border-b border-edge">
       <div className="absolute inset-0 grid-backdrop" />
@@ -79,9 +91,7 @@ function Hero() {
             </p>
 
             <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:items-center">
-              <Link href="/onboarding" className="btn-send text-base">
-                SEND IT →
-              </Link>
+              <StartLink className="btn-send text-base" />
               <a href="#how" className="btn-ghost text-base">
                 See how it works
               </a>
@@ -93,7 +103,7 @@ function Hero() {
           </div>
 
           <div className="lg:pl-4">
-            <HeroFlow />
+            <HeroFlow platformsLabel={platformsLabel} />
           </div>
         </div>
       </div>
@@ -212,56 +222,56 @@ function Solution() {
 
 /* ── How it works ───────────────────────────────────────────────────────── */
 
-const STEPS = [
-  {
-    n: '01',
-    title: 'Drop in your repo.',
-    body: 'Paste your GitHub repository. FullSend analyzes your product.',
-    items: [],
-  },
-  {
-    n: '02',
-    title: 'We figure out what to say.',
-    body: 'FullSend identifies:',
-    items: [
-      'target audience',
-      'personas',
-      'pain points',
-      'positioning',
-      'differentiators',
-      'content opportunities',
-    ],
-  },
-  {
-    n: '03',
-    title: 'We build the machine.',
-    body: 'FullSend creates:',
-    items: [
-      'marketing strategy',
-      'content pillars',
-      'campaigns',
-      'posts',
-      'videos',
-      'captions',
-      'graphics',
-      'hashtags',
-    ],
-  },
-  {
-    n: '04',
-    title: 'Connect your accounts.',
-    body: 'Connect:',
-    items: ['Instagram', 'TikTok', 'additional platforms as supported'],
-  },
-  {
-    n: '05',
-    title: 'FullSend.',
-    body: 'And then it just runs:',
-    items: ['Schedule.', 'Publish.', 'Analyze.', 'Optimize.', 'Repeat.'],
-  },
-];
+function HowItWorks({ connectItems }: { connectItems: string[] }) {
+  const STEPS = [
+    {
+      n: '01',
+      title: 'Drop in your repo.',
+      body: 'Paste your GitHub repository. FullSend analyzes your product.',
+      items: [] as string[],
+    },
+    {
+      n: '02',
+      title: 'We figure out what to say.',
+      body: 'FullSend identifies:',
+      items: [
+        'target audience',
+        'personas',
+        'pain points',
+        'positioning',
+        'differentiators',
+        'content opportunities',
+      ],
+    },
+    {
+      n: '03',
+      title: 'We build the machine.',
+      body: 'FullSend creates:',
+      items: [
+        'marketing strategy',
+        'content pillars',
+        'campaigns',
+        'posts',
+        'videos',
+        'captions',
+        'graphics',
+        'hashtags',
+      ],
+    },
+    {
+      n: '04',
+      title: 'Connect your accounts.',
+      body: 'Connect:',
+      items: connectItems,
+    },
+    {
+      n: '05',
+      title: 'FullSend.',
+      body: 'And then it just runs:',
+      items: ['Schedule.', 'Publish.', 'Analyze.', 'Optimize.', 'Repeat.'],
+    },
+  ];
 
-function HowItWorks() {
   return (
     <section id="how" className="border-b border-edge">
       <div className="mx-auto max-w-7xl px-5 py-20 sm:px-8 sm:py-28">
@@ -319,12 +329,9 @@ function BigMessage() {
         <p className="mx-auto mt-8 max-w-2xl font-display text-xl font-bold tracking-tight text-void/80 sm:text-2xl">
           Your app doesn&rsquo;t need another feature right now. It needs attention.
         </p>
-        <Link
-          href="/onboarding"
-          className="mt-10 inline-flex items-center justify-center gap-2 rounded-sm bg-void px-8 py-4 font-display text-lg font-extrabold uppercase tracking-tight text-orange transition-transform duration-150 hover:scale-[1.02] active:translate-y-px"
-        >
+        <StartLink className="mt-10 inline-flex items-center justify-center gap-2 rounded-sm bg-void px-8 py-4 font-display text-lg font-extrabold uppercase tracking-tight text-orange transition-transform duration-150 hover:scale-[1.02] active:translate-y-px">
           FULL SEND →
-        </Link>
+        </StartLink>
       </div>
     </section>
   );
@@ -332,7 +339,7 @@ function BigMessage() {
 
 /* ── Autopilot ──────────────────────────────────────────────────────────── */
 
-function Autopilot() {
+function Autopilot({ platformsLabel }: { platformsLabel: string }) {
   return (
     <section className="border-b border-edge">
       <div className="mx-auto max-w-7xl px-5 py-20 sm:px-8 sm:py-28">
@@ -358,7 +365,7 @@ function Autopilot() {
             </div>
           </div>
 
-          <AutopilotPanel />
+          <AutopilotPanel platformsLabel={platformsLabel} />
         </div>
       </div>
     </section>
@@ -367,49 +374,49 @@ function Autopilot() {
 
 /* ── Pricing ────────────────────────────────────────────────────────────── */
 
-const TIERS = [
-  {
-    name: 'FREE',
-    price: '$0',
-    tagline: 'See it work',
-    features: ['1 project', 'Repo analysis + strategy', '10 posts / month', 'Manual approval'],
-    cta: 'Start free',
-    highlight: false,
-  },
-  {
-    name: 'SEND',
-    price: '$29',
-    tagline: 'Content on tap',
-    features: ['1 project', 'Automated content', '60 posts / month', 'Instagram + TikTok', 'Hybrid autopilot'],
-    cta: 'Start sending',
-    highlight: false,
-  },
-  {
-    name: 'FULL SEND',
-    price: '$79',
-    tagline: 'Turn it on, walk away',
-    features: [
-      '1 project',
-      'Unlimited posts',
-      'All platforms',
-      'Full Send autopilot',
-      'Weekly optimization',
-      'Send Score + reporting',
-    ],
-    cta: 'FULL SEND →',
-    highlight: true,
-  },
-  {
-    name: 'AGENCY',
-    price: '$249',
-    tagline: 'Every client, running',
-    features: ['10 projects', 'Everything in Full Send', 'Per-client reporting', 'Priority support'],
-    cta: 'Talk to us',
-    highlight: false,
-  },
-];
+function Pricing({ sendTierPlatforms }: { sendTierPlatforms: string }) {
+  const TIERS = [
+    {
+      name: 'FREE',
+      price: '$0',
+      tagline: 'See it work',
+      features: ['1 project', 'Repo analysis + strategy', '10 posts / month', 'Manual approval'],
+      cta: 'Start free',
+      highlight: false,
+    },
+    {
+      name: 'SEND',
+      price: '$29',
+      tagline: 'Content on tap',
+      features: ['1 project', 'Automated content', '60 posts / month', sendTierPlatforms, 'Hybrid autopilot'],
+      cta: 'Start sending',
+      highlight: false,
+    },
+    {
+      name: 'FULL SEND',
+      price: '$79',
+      tagline: 'Turn it on, walk away',
+      features: [
+        '1 project',
+        'Unlimited posts',
+        'All platforms',
+        'Full Send autopilot',
+        'Weekly optimization',
+        'Send Score + reporting',
+      ],
+      cta: 'FULL SEND →',
+      highlight: true,
+    },
+    {
+      name: 'AGENCY',
+      price: '$249',
+      tagline: 'Every client, running',
+      features: ['10 projects', 'Everything in Full Send', 'Per-client reporting', 'Priority support'],
+      cta: 'Talk to us',
+      highlight: false,
+    },
+  ];
 
-function Pricing() {
   return (
     <section id="pricing" className="border-b border-edge bg-ink">
       <div className="mx-auto max-w-7xl px-5 py-20 sm:px-8 sm:py-28">
@@ -448,12 +455,9 @@ function Pricing() {
                   </li>
                 ))}
               </ul>
-              <Link
-                href="/onboarding"
-                className={tier.highlight ? 'btn-send mt-7 w-full' : 'btn-ghost mt-7 w-full'}
-              >
+              <StartLink className={tier.highlight ? 'btn-send mt-7 w-full' : 'btn-ghost mt-7 w-full'}>
                 {tier.cta}
-              </Link>
+              </StartLink>
             </div>
           ))}
         </div>
@@ -480,9 +484,7 @@ function FinalCta() {
         <p className="mt-6 text-lg text-dim">
           Paste a repo. Watch it figure out your product. Decide if you believe it.
         </p>
-        <Link href="/onboarding" className="btn-send mt-9 text-lg">
-          SEND IT →
-        </Link>
+        <StartLink className="btn-send mt-9 text-lg" />
         <p className="mt-6 font-mono text-xs text-dimmer">
           BUILD ONCE. MARKET FOREVER.
         </p>

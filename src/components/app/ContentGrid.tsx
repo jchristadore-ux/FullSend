@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { STATUS_LABEL, STATUS_STYLE } from './status';
+import type { GenerationBlocker } from '@/lib/content/blockers';
 
 export interface ContentCard {
   id: string;
@@ -32,12 +33,14 @@ export function ContentGrid({
   total,
   activeFilter,
   statuses,
+  blocked = null,
 }: {
   items: ContentCard[];
   counts: Record<string, number>;
   total: number;
   activeFilter: string | null;
   statuses: string[];
+  blocked?: GenerationBlocker | null;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
@@ -87,12 +90,23 @@ export function ContentGrid({
           <p className="font-display text-xl font-extrabold tracking-tight text-mist">
             Nothing here yet.
           </p>
-          <p className="mt-2 text-sm text-dim">
-            Generate a calendar and FullSend fills this with real posts.
-          </p>
-          <Link href="/app/calendar" className="btn-send mt-5 !px-4 !py-2 text-xs">
-            OPEN THE CALENDAR
-          </Link>
+          {blocked ? (
+            <>
+              <p className="mt-2 text-sm text-dim">{blocked.message}</p>
+              <Link href={blocked.fix.href} className="btn-send mt-5 !px-4 !py-2 text-xs">
+                {blocked.fix.label.toUpperCase()} →
+              </Link>
+            </>
+          ) : (
+            <>
+              <p className="mt-2 text-sm text-dim">
+                Generate a calendar and FullSend fills this with real posts.
+              </p>
+              <Link href="/app/calendar" className="btn-send mt-5 !px-4 !py-2 text-xs">
+                OPEN THE CALENDAR
+              </Link>
+            </>
+          )}
         </div>
       ) : (
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -106,15 +120,6 @@ export function ContentGrid({
                   className="aspect-[4/5] w-full border-b border-edge object-cover"
                 />
               ) : (
-                /*
-                 * No visual, said out loud.
-                 *
-                 * This card used to render the copy with nothing above it,
-                 * which reads as a design choice rather than a failure — and
-                 * that is exactly how a run of posts with no creative at all
-                 * went unnoticed. A post that is missing its picture now says
-                 * so, in the space the picture would have occupied.
-                 */
                 <div className="flex aspect-[4/5] w-full flex-col items-start justify-center gap-2 border-b border-edge bg-fail/5 px-4">
                   <p className="font-mono text-[10px] uppercase tracking-wider text-fail">
                     {item.generationState === 'failed' ? 'Creative failed' : 'No creative yet'}

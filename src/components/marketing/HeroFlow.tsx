@@ -9,16 +9,30 @@ import { useEffect, useState } from 'react';
  * that is actively working rather than a static diagram.
  */
 
-const STAGES = [
-  { key: 'repo', label: 'GitHub Repo', detail: 'github.com/you/your-app', kind: 'input' },
-  { key: 'analysis', label: 'Product Analysis', detail: '9 features · 3 personas', kind: 'work' },
-  { key: 'strategy', label: 'Marketing Strategy', detail: '5 pillars · 3 campaigns', kind: 'work' },
-  { key: 'accounts', label: 'Instagram + TikTok', detail: 'Connected', kind: 'work' },
-  { key: 'calendar', label: 'Content Calendar', detail: '30 days · 28 posts', kind: 'work' },
-  { key: 'published', label: 'Published', detail: 'Live', kind: 'output' },
-] as const;
+type Stage = {
+  key: string;
+  label: string;
+  detail: string;
+  kind: 'input' | 'work' | 'output';
+};
 
-export function HeroFlow() {
+function stagesFor(platformsLabel: string): Stage[] {
+  return [
+    { key: 'repo', label: 'GitHub Repo', detail: 'github.com/you/your-app', kind: 'input' },
+    { key: 'analysis', label: 'Product Analysis', detail: '9 features · 3 personas', kind: 'work' },
+    { key: 'strategy', label: 'Marketing Strategy', detail: '5 pillars · 3 campaigns', kind: 'work' },
+    { key: 'accounts', label: platformsLabel, detail: 'Ready to connect', kind: 'work' },
+    { key: 'calendar', label: 'Content Calendar', detail: '30 days · 28 posts', kind: 'work' },
+    { key: 'published', label: 'Published', detail: 'Live', kind: 'output' },
+  ];
+}
+
+export function HeroFlow({
+  platformsLabel = 'Instagram (TikTok when connected)',
+}: {
+  platformsLabel?: string;
+}) {
+  const STAGES = stagesFor(platformsLabel);
   const [active, setActive] = useState(0);
 
   useEffect(() => {
@@ -26,11 +40,10 @@ export function HeroFlow() {
       setActive((n) => (n + 1) % (STAGES.length + 2));
     }, 900);
     return () => clearInterval(id);
-  }, []);
+  }, [STAGES.length]);
 
   return (
     <div className="panel-raised relative overflow-hidden p-5 sm:p-7 shadow-panel">
-      {/* Command-centre chrome. */}
       <div className="flex items-center justify-between border-b border-edge pb-4 mb-5">
         <div className="flex items-center gap-2.5">
           <span className="dot-live" />
@@ -89,7 +102,6 @@ export function HeroFlow() {
                 )}
               </div>
 
-              {/* The connector between stages, which the pulse travels down. */}
               {i < STAGES.length - 1 && (
                 <div className="relative ml-[26px] h-4 w-px overflow-hidden bg-edge">
                   {(done || running) && (
