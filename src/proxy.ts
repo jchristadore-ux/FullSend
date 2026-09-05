@@ -70,7 +70,14 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
     }
   }
 
-  return refreshSession(req);
+  return refreshSession(req, pathname);
+}
+
+/** Request with `x-pathname` so App Router layouts can preserve `login?next=`. */
+function nextWithPath(req: NextRequest, pathname: string): NextResponse {
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set('x-pathname', pathname);
+  return NextResponse.next({ request: { headers: requestHeaders } });
 }
 
 /**
@@ -81,12 +88,12 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
  * expiry; the cookie adapter below is what makes the result stick. Both halves
  * are needed — calling one without the other is the bug this fixes.
  */
-async function refreshSession(req: NextRequest): Promise<NextResponse> {
+async function refreshSession(req: NextRequest, pathname: string): Promise<NextResponse> {
   // Not configured: the app runs on its local dev session instead, and there
   // is nothing to refresh.
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return NextResponse.next();
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return nextWithPath(req, pathname);
 
-  let res = NextResponse.next({ request: req });
+  let res = nextWithPath(req, pathname);
 
   const supabase = createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     cookies: {
@@ -95,7 +102,7 @@ async function refreshSession(req: NextRequest): Promise<NextResponse> {
         // Update the request too, so a page rendered in this same pass reads
         // the refreshed token rather than the one that just expired.
         for (const { name, value } of toSet) req.cookies.set(name, value);
-        res = NextResponse.next({ request: req });
+        res = nextWithPath(req, pathname);
         for (const { name, value, options } of toSet) res.cookies.set(name, value, options);
       },
     },
