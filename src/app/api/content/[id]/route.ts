@@ -15,6 +15,15 @@ export const GET = route(async ({ session, params }) => {
   const assets = await db().find(session.scope, 'creative_assets', {
     where: { project_id: item.project_id, content_item_id: item.id },
   });
+  // Never return raw SVG markup to the client — id/kind/url/dims/alt only.
+  const creative = assets.map((a) => ({
+    id: a.id,
+    kind: a.kind,
+    url: a.url,
+    width: a.width,
+    height: a.height,
+    alt_text: a.alt_text,
+  }));
   const scheduled = await db().findOne(session.scope, 'scheduled_posts', {
     where: { content_item_id: item.id },
   });
@@ -22,7 +31,7 @@ export const GET = route(async ({ session, params }) => {
     where: { content_item_id: item.id },
   });
 
-  return { content: item, creative: assets, scheduled, published };
+  return { content: item, creative, scheduled, published };
 });
 
 /**
