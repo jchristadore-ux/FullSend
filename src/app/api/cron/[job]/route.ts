@@ -4,7 +4,8 @@ import { FullSendError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { systemScope } from '@/lib/db';
 import { db, enqueue } from '@/lib/db/repo';
-import { CRON_MAX_HEAVY_PER_PASS, cronSecretValid, drainQueue } from '@/lib/jobs/runner';
+import { CRON_MAX_HEAVY_PER_PASS, drainQueue } from '@/lib/jobs/runner';
+import { cronSecretValid } from '@/lib/jobs/cron-auth';
 import { enqueueDuePublishJobs, projectsForAutopilot } from '@/lib/automation/autopilot';
 import { sweep } from '@/lib/rate-limit';
 
