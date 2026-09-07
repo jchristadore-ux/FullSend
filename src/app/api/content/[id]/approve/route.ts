@@ -4,6 +4,7 @@ import { audit, db, enqueueOnce, getProject } from '@/lib/db/repo';
 import { FullSendError, notFound } from '@/lib/errors';
 import { nowIso } from '@/lib/ids';
 import { scheduleContent } from '@/lib/scheduler/schedule';
+import { assertCanUsePosts } from '@/lib/billing/enforce';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -19,6 +20,10 @@ export const POST = route(
 
     const project = await getProject(session.scope, item.project_id);
     if (!project) throw notFound('Project');
+
+    await assertCanUsePosts(session.scope, session.user.id, item.project_id, {
+      action: body.publishNow ? 'publish' : 'schedule',
+    });
 
     if (item.qc && !item.qc.passed && !body.override) {
       throw new FullSendError(

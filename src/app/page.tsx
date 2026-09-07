@@ -3,6 +3,7 @@ import { FullSendLockup } from '@/components/brand/Logo';
 import { HeroFlow } from '@/components/marketing/HeroFlow';
 import { AutopilotPanel } from '@/components/marketing/AutopilotPanel';
 import { SignInLink, StartLink } from '@/components/marketing/SessionLinks';
+import { PricingCta } from '@/components/billing/PricingCta';
 import { capabilities } from '@/lib/env';
 
 export default async function LandingPage() {
@@ -26,7 +27,7 @@ export default async function LandingPage() {
       <HowItWorks connectItems={connectItems} />
       <BigMessage />
       <Autopilot platformsLabel={platformsLabel} />
-      <Pricing sendTierPlatforms={sendTierPlatforms} />
+      <Pricing sendTierPlatforms={sendTierPlatforms} billingEnabled={caps.billing} />
       <FinalCta />
       <Footer />
     </main>
@@ -374,17 +375,25 @@ function Autopilot({ platformsLabel }: { platformsLabel: string }) {
 
 /* ── Pricing ────────────────────────────────────────────────────────────── */
 
-function Pricing({ sendTierPlatforms }: { sendTierPlatforms: string }) {
+function Pricing({
+  sendTierPlatforms,
+  billingEnabled,
+}: {
+  sendTierPlatforms: string;
+  billingEnabled: boolean;
+}) {
   const TIERS = [
     {
+      tier: 'free' as const,
       name: 'FREE',
       price: '$0',
-      tagline: 'See it work',
+      tagline: 'See Instagram work from your repo',
       features: ['1 project', 'Repo analysis + strategy', '10 posts / month', 'Manual approval'],
       cta: 'Start free',
       highlight: false,
     },
     {
+      tier: 'send' as const,
       name: 'SEND',
       price: '$29',
       tagline: 'Content on tap',
@@ -393,26 +402,28 @@ function Pricing({ sendTierPlatforms }: { sendTierPlatforms: string }) {
       highlight: false,
     },
     {
+      tier: 'full_send' as const,
       name: 'FULL SEND',
       price: '$79',
       tagline: 'Turn it on, walk away',
       features: [
         '1 project',
-        'Unlimited posts',
-        'All platforms',
+        '1,000 posts / month',
+        sendTierPlatforms,
         'Full Send autopilot',
         'Weekly optimization',
         'Send Score + reporting',
       ],
-      cta: 'FULL SEND →',
+      cta: 'FULL SEND',
       highlight: true,
     },
     {
+      tier: 'agency' as const,
       name: 'AGENCY',
       price: '$249',
       tagline: 'Every client, running',
-      features: ['10 projects', 'Everything in Full Send', 'Per-client reporting', 'Priority support'],
-      cta: 'Talk to us',
+      features: ['10 projects', '10,000 posts / month', 'Everything in Full Send', 'Priority support'],
+      cta: 'Go Agency',
       highlight: false,
     },
   ];
@@ -455,15 +466,18 @@ function Pricing({ sendTierPlatforms }: { sendTierPlatforms: string }) {
                   </li>
                 ))}
               </ul>
-              <StartLink className={tier.highlight ? 'btn-send mt-7 w-full' : 'btn-ghost mt-7 w-full'}>
-                {tier.cta}
-              </StartLink>
+              <PricingCta
+                tier={tier.tier}
+                label={tier.cta}
+                billingEnabled={billingEnabled}
+                className={tier.highlight ? 'btn-send mt-7 w-full' : 'btn-ghost mt-7 w-full'}
+              />
             </div>
           ))}
         </div>
 
         <p className="mt-6 font-mono text-xs text-dimmer">
-          Billing is Stripe-ready and switched off by default — run the whole product without it.
+          Instagram-first. Checkout opens when Stripe is configured — without a key, the whole product runs with no limits.
         </p>
       </div>
     </section>

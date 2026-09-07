@@ -18,6 +18,7 @@ const ITEMS = [
   { href: '/app/accounts', label: 'Accounts', short: 'Accounts', icon: '⬡', mobile: true },
   { href: '/app/analytics', label: 'Analytics', short: 'Stats', icon: '▲', mobile: false },
   { href: '/app/strategy', label: 'Strategy', short: 'Strategy', icon: '◈', mobile: false },
+  { href: '/app/billing', label: 'Billing', short: 'Billing', icon: '#', mobile: false },
   { href: '/app/settings', label: 'Settings', short: 'Settings', icon: '⚙', mobile: false },
 ];
 

@@ -4,8 +4,7 @@ import { createProjectInput } from '@/lib/schemas';
 import { db, enqueueOnce, getRepository, listProjects } from '@/lib/db/repo';
 import { newId, nowIso, slugify } from '@/lib/ids';
 import { parseRepoInput } from '@/lib/github/client';
-import { FullSendError } from '@/lib/errors';
-import { planLimitsFor, subscriptionFor } from '@/lib/billing/plans';
+import { assertCanCreateProject } from '@/lib/billing/enforce';
 import {
   pipelineState,
   stagePayload,
@@ -57,20 +56,9 @@ export const POST = route(
       );
     }
 
-    const subscription = await subscriptionFor(session.scope, session.user.id);
-    const limits = planLimitsFor(subscription.tier);
-    const existing = await listProjects(session.scope, session.user.id);
-    if (existing.length >= limits.projects) {
-      throw new FullSendError(
-        'plan_limit',
-        `Your plan includes ${limits.projects} project${limits.projects === 1 ? '' : 's'}`,
-        {
-          status: 402,
-          remedy: 'Upgrade to add more projects, or delete an existing one.',
-        },
-      );
-    }
+    await assertCanCreateProject(session.scope, session.user.id);
 
+    const existing = await listProjects(session.scope, session.user.id);
     const name = body.name?.trim() || titleize(ref.name);
     const project = await db().insert(session.scope, 'projects', {
       id: newId(),

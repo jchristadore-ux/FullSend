@@ -3,7 +3,8 @@ import { requireSession } from '@/lib/auth/session';
 import { activeProject } from '@/lib/active-project';
 import { getRepository, getSettings } from '@/lib/db/repo';
 import { aiSpend } from '@/lib/ai/client';
-import { subscriptionFor, PLANS, billingEnabled } from '@/lib/billing/plans';
+import { PLANS } from '@/lib/billing/plans';
+import { loadAccess } from '@/lib/billing/enforce';
 import { capabilities } from '@/lib/env';
 import { SettingsView } from '@/components/app/SettingsView';
 
@@ -15,11 +16,11 @@ export default async function SettingsPage() {
   const project = await activeProject(session);
   if (!project) redirect('/onboarding');
 
-  const [settings, repository, spend, subscription] = await Promise.all([
+  const [settings, repository, spend, access] = await Promise.all([
     getSettings(session.scope, project.id),
     getRepository(session.scope, project.id),
     aiSpend(session.scope, { projectId: project.id }),
-    subscriptionFor(session.scope, session.user.id),
+    loadAccess(session.scope, session.user.id),
   ]);
 
   return (
@@ -29,9 +30,9 @@ export default async function SettingsPage() {
       repository={repository}
       spend={spend}
       plan={{
-        tier: subscription.tier,
-        name: PLANS[subscription.tier].name,
-        billingEnabled: billingEnabled(),
+        tier: access.tier,
+        name: PLANS[access.tier].name,
+        billingEnabled: access.billingOn,
       }}
       capabilities={capabilities()}
       userEmail={session.user.email}

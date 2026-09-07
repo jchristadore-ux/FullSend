@@ -46,6 +46,16 @@ Publishing is durable in the same sense. Instagram publishes in two calls — cr
 
 Instagram is the only active production social destination. The codebase may retain provider abstractions for future expansion, but the production content, scheduling, media, and publishing flow is Instagram-focused.
 
+## Billing (Stripe)
+
+Plans live in `src/lib/billing/plans.ts`: **Free** / **Send ($29)** / **Full Send ($79)** / **Agency ($249)**.
+
+- **No `STRIPE_SECRET_KEY`** → billing is off; every account gets the full product with no limits.
+- **Stripe configured** → free limits enforce; paid tiers need an `active` or `trialing` subscription. Checkout and the Customer Portal handle cards — FullSend never sees card numbers.
+- Webhooks at `/api/billing/webhook` keep the `subscriptions` row in sync. In-app UI: `/app/billing`.
+
+Owner setup (Dashboard + Vercel env) is documented in the Stripe billing pull request checklist.
+
 ## Local development
 
 Requires Node.js 22.x.
