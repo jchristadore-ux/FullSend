@@ -222,6 +222,11 @@ export function SettingsView({
             ? 'Billing is active on this deployment.'
             : 'Billing is switched off on this deployment — every feature is available and no limits are enforced.'}
         </p>
+        {plan.billingEnabled && (
+          <a href="/app/billing" className="btn-ghost mt-4 inline-flex text-sm">
+            Manage plan and billing
+          </a>
+        )}
       </section>
 
       {/* Capabilities — honest about what is and is not wired up. */}

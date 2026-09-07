@@ -3,6 +3,7 @@ import { LIMITS, projectRoute } from '@/lib/api/handler';
 import { generateCalendarInput } from '@/lib/schemas';
 import { db, enqueue, listContent } from '@/lib/db/repo';
 import { svgDataUri } from '@/lib/creative/render';
+import { assertCanUsePosts } from '@/lib/billing/enforce';
 import type { ContentStatus } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -55,6 +56,9 @@ export const GET = projectRoute(async ({ session, project, req }) => {
 /** Generates a fresh batch for the requested window. */
 export const POST = projectRoute(
   async ({ session, project, body }) => {
+    await assertCanUsePosts(session.scope, session.user.id, project.id, {
+      action: 'generate',
+    });
     const job = await enqueue(
       session.scope,
       'generate_content',

@@ -128,12 +128,25 @@ export const env = {
   },
 
   stripe: {
-    secretKey: opt('STRIPE_SECRET_KEY'),
-    webhookSecret: opt('STRIPE_WEBHOOK_SECRET'),
-    publishableKey: opt('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY'),
-    priceSend: opt('STRIPE_PRICE_SEND'),
-    priceFullSend: opt('STRIPE_PRICE_FULL_SEND'),
-    priceAgency: opt('STRIPE_PRICE_AGENCY'),
+    // Getters so tests (and late-injected serverless env) see live values.
+    get secretKey() {
+      return opt('STRIPE_SECRET_KEY');
+    },
+    get webhookSecret() {
+      return opt('STRIPE_WEBHOOK_SECRET');
+    },
+    get publishableKey() {
+      return opt('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY');
+    },
+    get priceSend() {
+      return opt('STRIPE_PRICE_SEND');
+    },
+    get priceFullSend() {
+      return opt('STRIPE_PRICE_FULL_SEND');
+    },
+    get priceAgency() {
+      return opt('STRIPE_PRICE_AGENCY');
+    },
     get enabled() {
       return Boolean(opt('STRIPE_SECRET_KEY'));
     },

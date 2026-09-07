@@ -1,6 +1,7 @@
 import { LIMITS, projectRoute } from '@/lib/api/handler';
 import { z } from 'zod';
 import { enqueueOnce } from '@/lib/db/repo';
+import { assertCanUsePosts } from '@/lib/billing/enforce';
 import { pipelineState, stagePayload, STAGE_ENTRY_JOB, type StageName } from '@/lib/pipeline/state';
 
 export const runtime = 'nodejs';
@@ -29,6 +30,12 @@ export const POST = projectRoute(
 
     if (target.status === 'complete' && !body.refresh) {
       return { stage, started: false, reason: 'Already complete. Nothing was re-run.', state };
+    }
+
+    if (stage === 'content' || stage === 'schedule') {
+      await assertCanUsePosts(session.scope, session.user.id, project.id, {
+        action: stage === 'content' ? 'generate' : 'schedule',
+      });
     }
 
     const payload = await stagePayload(session.scope, project, stage);
