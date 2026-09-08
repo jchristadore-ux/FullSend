@@ -31,6 +31,13 @@ type StatusPayload = {
       optimization: boolean;
     };
   }>;
+  subscription?: {
+    tier: string;
+    status: string;
+    currentPeriodEnd: string | null;
+    hasCustomer: boolean;
+    hasSubscription: boolean;
+  };
 };
 
 export function BillingView({ initial }: { initial: StatusPayload | null }) {
@@ -115,6 +122,7 @@ export function BillingView({ initial }: { initial: StatusPayload | null }) {
     100,
     Math.round((status.usage.postsThisMonth.used / Math.max(1, status.usage.postsThisMonth.limit)) * 100),
   );
+  const hasStripeSubscription = Boolean(status.subscription?.hasSubscription);
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-6 sm:px-8 sm:py-10">
@@ -141,13 +149,20 @@ export function BillingView({ initial }: { initial: StatusPayload | null }) {
         </div>
       )}
 
-      {!status.live && (
+      {!status.live && hasStripeSubscription && (
         <div className="mt-4">
           <Paywall
             title="Subscription inactive"
             message={`Status: ${status.status}. Paid features need an active or trialing subscription.`}
             remedy="Update payment in Manage billing, or pick a plan below."
           />
+        </div>
+      )}
+
+      {!hasStripeSubscription && (
+        <div className="mt-4 border border-orange/40 bg-orange/10 px-4 py-3 text-sm text-mist">
+          Subscribe to manage billing in Stripe. The Customer Portal is available, but it will not
+          show a subscription or invoices until you complete Checkout.
         </div>
       )}
 
@@ -193,7 +208,7 @@ export function BillingView({ initial }: { initial: StatusPayload | null }) {
           {status.catalog
             .filter((c) => c.tier !== 'free')
             .map((c) => {
-              const current = c.tier === status.tier && status.live;
+              const current = c.tier === status.tier && status.live && hasStripeSubscription;
               return (
                 <div
                   key={c.tier}

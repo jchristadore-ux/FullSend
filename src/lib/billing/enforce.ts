@@ -3,7 +3,7 @@
  *
  * When Stripe is not configured, every check is a no-op and the product runs
  * wide open. With billing on, free limits apply; paid tiers need an
- * active/trialing subscription.
+ * active/trialing Stripe subscription (stripe_subscription_id present).
  */
 import 'server-only';
 import { type TenantScope } from '../db';
@@ -12,6 +12,7 @@ import { FullSendError } from '../errors';
 import type { PlanLimits, PlanTier, Subscription, Uuid } from '../types';
 import {
   billingEnabled,
+  entitledTier,
   planLimitsFor,
   postsThisMonth,
   subscriptionFor,
@@ -22,20 +23,19 @@ const PAID_OK = new Set(['active', 'trialing']);
 /**
  * The tier whose limits actually apply right now.
  *
- * Billing off → agency (full product). Paid but lapsed → free limits until they
- * fix payment or upgrade again.
+ * Delegates to entitledTier: billing off → agency; paid only with live Stripe
+ * sub; otherwise free (including orphan pre-Stripe paid rows).
  */
 export function resolveTier(subscription: Subscription): PlanTier {
-  if (!billingEnabled()) return 'agency';
-  if (subscription.tier === 'free') return 'free';
-  if (PAID_OK.has(subscription.status)) return subscription.tier;
-  return 'free';
+  return entitledTier(subscription);
 }
 
 export function isSubscriptionLive(subscription: Subscription): boolean {
   if (!billingEnabled()) return true;
   if (subscription.tier === 'free') return true;
-  return PAID_OK.has(subscription.status);
+  return (
+    PAID_OK.has(subscription.status) && Boolean(subscription.stripe_subscription_id)
+  );
 }
 
 export function upgradeRemedy(detail?: string): string {
