@@ -5,6 +5,7 @@ import { env } from '@/lib/env';
 import { billingEnabled, priceIdFor } from '@/lib/billing/plans';
 import { ensureStripeCustomer } from '@/lib/billing/customers';
 import { requireStripe } from '@/lib/billing/stripe';
+import { rethrowStripeBillingError } from '@/lib/billing/stripe-errors';
 import type { PlanTier } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -35,42 +36,46 @@ export const POST = route(
       );
     }
 
-    const stripe = requireStripe();
-    const { customerId } = await ensureStripeCustomer(session.scope, session.user);
+    try {
+      const stripe = requireStripe();
+      const { customerId } = await ensureStripeCustomer(session.scope, session.user);
 
-    const checkout = await stripe.checkout.sessions.create({
-      mode: 'subscription',
-      customer: customerId,
-      client_reference_id: session.user.id,
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${env.appUrl}/app/billing?checkout=success`,
-      cancel_url: `${env.appUrl}/app/billing?checkout=cancel`,
-      allow_promotion_codes: true,
-      metadata: {
-        user_id: session.user.id,
-        tier,
-      },
-      subscription_data: {
+      const checkout = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        customer: customerId,
+        client_reference_id: session.user.id,
+        line_items: [{ price: priceId, quantity: 1 }],
+        success_url: `${env.appUrl}/app/billing?checkout=success`,
+        cancel_url: `${env.appUrl}/app/billing?checkout=cancel`,
+        allow_promotion_codes: true,
         metadata: {
           user_id: session.user.id,
           tier,
         },
-      },
-    });
-
-    if (!checkout.url) {
-      throw new FullSendError('checkout_failed', 'Stripe did not return a Checkout URL', {
-        status: 502,
-        remedy: 'Try again in a moment. If it keeps failing, check the Stripe Dashboard logs.',
-        retryable: true,
+        subscription_data: {
+          metadata: {
+            user_id: session.user.id,
+            tier,
+          },
+        },
       });
-    }
 
-    return { url: checkout.url, sessionId: checkout.id };
+      if (!checkout.url) {
+        throw new FullSendError('checkout_failed', 'Stripe did not return a Checkout URL', {
+          status: 502,
+          remedy: 'Try again in a moment. If it keeps failing, check the Stripe Dashboard logs.',
+          retryable: true,
+        });
+      }
+
+      return { url: checkout.url, sessionId: checkout.id };
+    } catch (err) {
+      rethrowStripeBillingError(err, 'checkout');
+    }
   },
   {
     schema: bodySchema,
-    rateLimit: LIMITS.analyze,
+    rateLimit: LIMITS.billingCheckout,
     rateLimitKey: 'billing-checkout',
   },
 );

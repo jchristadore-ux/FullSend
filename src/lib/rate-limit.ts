@@ -27,6 +27,8 @@ export const LIMITS = {
   generateContent: { limit: 20, windowMs: 60 * 60 * 1000 },
   oauthStart: { limit: 10, windowMs: 10 * 60 * 1000 },
   publishManual: { limit: 30, windowMs: 60 * 60 * 1000 },
+  /** Checkout / portal — interactive billing, not analyze-tier scarce. */
+  billingCheckout: { limit: 30, windowMs: 15 * 60 * 1000 },
   api: { limit: 300, windowMs: 60 * 1000 },
   authAttempt: { limit: 10, windowMs: 15 * 60 * 1000 },
 } as const satisfies Record<string, LimitRule>;

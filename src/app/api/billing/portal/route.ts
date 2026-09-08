@@ -4,6 +4,7 @@ import { env } from '@/lib/env';
 import { billingEnabled } from '@/lib/billing/plans';
 import { ensureStripeCustomer } from '@/lib/billing/customers';
 import { requireStripe } from '@/lib/billing/stripe';
+import { rethrowStripeBillingError } from '@/lib/billing/stripe-errors';
 
 export const runtime = 'nodejs';
 
@@ -16,18 +17,22 @@ export const POST = route(
       });
     }
 
-    const stripe = requireStripe();
-    const { customerId } = await ensureStripeCustomer(session.scope, session.user);
+    try {
+      const stripe = requireStripe();
+      const { customerId } = await ensureStripeCustomer(session.scope, session.user);
 
-    const portal = await stripe.billingPortal.sessions.create({
-      customer: customerId,
-      return_url: `${env.appUrl}/app/billing`,
-    });
+      const portal = await stripe.billingPortal.sessions.create({
+        customer: customerId,
+        return_url: `${env.appUrl}/app/billing`,
+      });
 
-    return { url: portal.url };
+      return { url: portal.url };
+    } catch (err) {
+      rethrowStripeBillingError(err, 'portal');
+    }
   },
   {
-    rateLimit: LIMITS.analyze,
+    rateLimit: LIMITS.billingCheckout,
     rateLimitKey: 'billing-portal',
   },
 );
