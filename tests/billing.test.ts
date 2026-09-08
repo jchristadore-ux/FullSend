@@ -17,6 +17,7 @@ import {
   tierForPriceId,
   billingEnabled,
   entitledTier,
+  __setRetrieveSubscriptionForTesting,
 } from '@/lib/billing/plans';
 import {
   resolveTier,
@@ -53,6 +54,7 @@ function disableBilling() {
   delete process.env.STRIPE_PRICE_AGENCY;
   delete process.env.STRIPE_WEBHOOK_SECRET;
   resetStripeClient();
+  __setRetrieveSubscriptionForTesting(null);
 }
 
 function fakeStripeSub(opts: {
@@ -409,7 +411,7 @@ describe('plan limit gate', () => {
     );
   });
 
-  it('real stripe_subscription_id keeps paid limits', async () => {
+  it('live Stripe subscription keeps paid limits and syncs tier from price', async () => {
     const ctx = await setupContext();
     const row = await subscriptionFor(ctx.scope, ctx.user.id);
     await db().update(ctx.scope, 'subscriptions', row.id, {
@@ -419,8 +421,19 @@ describe('plan limit gate', () => {
       stripe_customer_id: 'cus_paid_real',
     });
 
+    __setRetrieveSubscriptionForTesting(async (id) => {
+      expect(id).toBe('sub_paid_real');
+      return fakeStripeSub({
+        id: 'sub_paid_real',
+        customer: 'cus_paid_real',
+        priceId: PRICE_FULL,
+        status: 'active',
+      });
+    });
+
     const live = await subscriptionFor(ctx.scope, ctx.user.id);
     expect(live.tier).toBe('full_send');
+    expect(live.stripe_subscription_id).toBe('sub_paid_real');
     expect(resolveTier(live)).toBe('full_send');
     expect(isSubscriptionLive(live)).toBe(true);
     expect(planLimitsFor(resolveTier(live)).posts_per_month).toBe(1000);
@@ -433,5 +446,86 @@ describe('plan limit gate', () => {
         e.code === 'plan_limit' &&
         (e.meta as { kind?: string }).kind === 'projects',
     );
+  });
+
+  it('ghost stripe_subscription_id (missing in Stripe) heals to free', async () => {
+    const ctx = await setupContext();
+    const row = await subscriptionFor(ctx.scope, ctx.user.id);
+    await db().update(ctx.scope, 'subscriptions', row.id, {
+      tier: 'full_send',
+      status: 'active',
+      stripe_subscription_id: 'sub_ghost_missing',
+      stripe_customer_id: 'cus_ghost',
+      current_period_end: new Date(Date.now() + 86400_000).toISOString(),
+    });
+
+    __setRetrieveSubscriptionForTesting(async () => {
+      const err = Object.assign(new Error('No such subscription: sub_ghost_missing'), {
+        code: 'resource_missing',
+        statusCode: 404,
+        type: 'StripeInvalidRequestError',
+      });
+      throw err;
+    });
+
+    const healed = await subscriptionFor(ctx.scope, ctx.user.id);
+    expect(healed.tier).toBe('free');
+    expect(healed.status).toBe('active');
+    expect(healed.stripe_subscription_id).toBeNull();
+    expect(healed.current_period_end).toBeNull();
+    expect(resolveTier(healed)).toBe('free');
+    expect(planLimitsFor(resolveTier(healed)).posts_per_month).toBe(10);
+  });
+
+  it('canceled Stripe subscription clears ghost id to free', async () => {
+    const ctx = await setupContext();
+    const row = await subscriptionFor(ctx.scope, ctx.user.id);
+    await db().update(ctx.scope, 'subscriptions', row.id, {
+      tier: 'send',
+      status: 'active',
+      stripe_subscription_id: 'sub_canceled_ghost',
+      stripe_customer_id: 'cus_canceled_ghost',
+    });
+
+    __setRetrieveSubscriptionForTesting(async () =>
+      fakeStripeSub({
+        id: 'sub_canceled_ghost',
+        customer: 'cus_canceled_ghost',
+        priceId: PRICE_SEND,
+        status: 'canceled',
+      }),
+    );
+
+    const healed = await subscriptionFor(ctx.scope, ctx.user.id);
+    expect(healed.tier).toBe('free');
+    expect(healed.status).toBe('active');
+    expect(healed.stripe_subscription_id).toBeNull();
+  });
+
+  it('past_due Stripe subscription keeps id and maps status', async () => {
+    const ctx = await setupContext();
+    const row = await subscriptionFor(ctx.scope, ctx.user.id);
+    await db().update(ctx.scope, 'subscriptions', row.id, {
+      tier: 'agency',
+      status: 'active',
+      stripe_subscription_id: 'sub_past_due',
+      stripe_customer_id: 'cus_past_due',
+    });
+
+    __setRetrieveSubscriptionForTesting(async () =>
+      fakeStripeSub({
+        id: 'sub_past_due',
+        customer: 'cus_past_due',
+        priceId: PRICE_AGENCY,
+        status: 'past_due',
+      }),
+    );
+
+    const synced = await subscriptionFor(ctx.scope, ctx.user.id);
+    expect(synced.tier).toBe('agency');
+    expect(synced.status).toBe('past_due');
+    expect(synced.stripe_subscription_id).toBe('sub_past_due');
+    expect(resolveTier(synced)).toBe('free');
+    expect(isSubscriptionLive(synced)).toBe(false);
   });
 });
