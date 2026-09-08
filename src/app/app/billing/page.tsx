@@ -33,6 +33,13 @@ export default async function BillingPage() {
       priceUsd: PLANS[tier].priceUsd,
       limits,
     },
+    subscription: {
+      tier: subscription.tier,
+      status: subscription.status,
+      currentPeriodEnd: subscription.current_period_end,
+      hasCustomer: Boolean(subscription.stripe_customer_id),
+      hasSubscription: Boolean(subscription.stripe_subscription_id),
+    },
     usage: {
       projects: { used: projects.length, limit: limits.projects },
       postsThisMonth: { used: postsUsed, limit: limits.posts_per_month },

@@ -16,6 +16,7 @@ import {
   subscriptionFor,
   tierForPriceId,
   billingEnabled,
+  entitledTier,
 } from '@/lib/billing/plans';
 import {
   resolveTier,
@@ -102,13 +103,68 @@ describe('plan resolution', () => {
     expect(billingEnabled()).toBe(true);
     expect(planLimitsFor('free').posts_per_month).toBe(10);
     expect(planLimitsFor('send').posts_per_month).toBe(60);
-    expect(resolveTier({ tier: 'free', status: 'active' } as Subscription)).toBe('free');
-    expect(resolveTier({ tier: 'full_send', status: 'active' } as Subscription)).toBe('full_send');
-    expect(resolveTier({ tier: 'full_send', status: 'trialing' } as Subscription)).toBe('full_send');
-    expect(resolveTier({ tier: 'send', status: 'past_due' } as Subscription)).toBe('free');
-    expect(resolveTier({ tier: 'agency', status: 'canceled' } as Subscription)).toBe('free');
-    expect(isSubscriptionLive({ tier: 'send', status: 'past_due' } as Subscription)).toBe(false);
-    expect(isSubscriptionLive({ tier: 'free', status: 'active' } as Subscription)).toBe(true);
+    expect(resolveTier({ tier: 'free', status: 'active', stripe_subscription_id: null } as Subscription)).toBe('free');
+    expect(
+      resolveTier({
+        tier: 'full_send',
+        status: 'active',
+        stripe_subscription_id: 'sub_live',
+      } as Subscription),
+    ).toBe('full_send');
+    expect(
+      resolveTier({
+        tier: 'full_send',
+        status: 'trialing',
+        stripe_subscription_id: 'sub_trial',
+      } as Subscription),
+    ).toBe('full_send');
+    expect(
+      resolveTier({
+        tier: 'send',
+        status: 'past_due',
+        stripe_subscription_id: 'sub_past',
+      } as Subscription),
+    ).toBe('free');
+    expect(
+      resolveTier({
+        tier: 'agency',
+        status: 'canceled',
+        stripe_subscription_id: null,
+      } as Subscription),
+    ).toBe('free');
+    expect(
+      isSubscriptionLive({
+        tier: 'send',
+        status: 'past_due',
+        stripe_subscription_id: 'sub_past',
+      } as Subscription),
+    ).toBe(false);
+    expect(
+      isSubscriptionLive({ tier: 'free', status: 'active', stripe_subscription_id: null } as Subscription),
+    ).toBe(true);
+  });
+
+  it('orphan paid tier without stripe_subscription_id is free when billing is on', () => {
+    enableBilling();
+    const orphan = {
+      tier: 'full_send',
+      status: 'active',
+      stripe_subscription_id: null,
+    } as Subscription;
+    expect(entitledTier(orphan)).toBe('free');
+    expect(resolveTier(orphan)).toBe('free');
+    expect(isSubscriptionLive(orphan)).toBe(false);
+    expect(planLimitsFor(resolveTier(orphan)).posts_per_month).toBe(10);
+
+    const real = {
+      tier: 'full_send',
+      status: 'active',
+      stripe_subscription_id: 'sub_real',
+    } as Subscription;
+    expect(entitledTier(real)).toBe('full_send');
+    expect(resolveTier(real)).toBe('full_send');
+    expect(isSubscriptionLive(real)).toBe(true);
+    expect(planLimitsFor(resolveTier(real)).posts_per_month).toBe(1000);
   });
 
   it('maps Stripe price IDs to tiers', () => {
@@ -317,6 +373,65 @@ describe('plan limit gate', () => {
       assertCanUsePosts(ctx.scope, ctx.user.id, project.id, { action: 'generate' }),
     ).rejects.toSatisfy(
       (e: unknown) => isFullSendError(e) && e.code === 'plan_limit' && e.status === 402,
+    );
+  });
+
+  it('orphan full_send without stripe_subscription_id gets free limits and self-heals', async () => {
+    const ctx = await setupContext();
+    const row = await subscriptionFor(ctx.scope, ctx.user.id);
+    // Simulate pre-Stripe insert that claimed Full Send with no Stripe sub.
+    await db().update(ctx.scope, 'subscriptions', row.id, {
+      tier: 'full_send',
+      status: 'active',
+      stripe_subscription_id: null,
+      stripe_customer_id: null,
+    });
+
+    // Pure entitlement (pre-heal) is free.
+    expect(
+      entitledTier({
+        tier: 'full_send',
+        status: 'active',
+        stripe_subscription_id: null,
+      }),
+    ).toBe('free');
+
+    // subscriptionFor persists the downgrade once.
+    const healed = await subscriptionFor(ctx.scope, ctx.user.id);
+    expect(healed.tier).toBe('free');
+    expect(healed.stripe_subscription_id).toBeNull();
+    expect(resolveTier(healed)).toBe('free');
+    expect(planLimitsFor(resolveTier(healed)).posts_per_month).toBe(10);
+
+    await createProject(ctx.scope, ctx.user.id);
+    await expect(assertCanCreateProject(ctx.scope, ctx.user.id)).rejects.toSatisfy(
+      (e: unknown) => isFullSendError(e) && e.code === 'plan_limit' && e.status === 402,
+    );
+  });
+
+  it('real stripe_subscription_id keeps paid limits', async () => {
+    const ctx = await setupContext();
+    const row = await subscriptionFor(ctx.scope, ctx.user.id);
+    await db().update(ctx.scope, 'subscriptions', row.id, {
+      tier: 'full_send',
+      status: 'active',
+      stripe_subscription_id: 'sub_paid_real',
+      stripe_customer_id: 'cus_paid_real',
+    });
+
+    const live = await subscriptionFor(ctx.scope, ctx.user.id);
+    expect(live.tier).toBe('full_send');
+    expect(resolveTier(live)).toBe('full_send');
+    expect(isSubscriptionLive(live)).toBe(true);
+    expect(planLimitsFor(resolveTier(live)).posts_per_month).toBe(1000);
+
+    await createProject(ctx.scope, ctx.user.id);
+    // full_send allows 1 project — second is still blocked, but not as free.
+    await expect(assertCanCreateProject(ctx.scope, ctx.user.id)).rejects.toSatisfy(
+      (e: unknown) =>
+        isFullSendError(e) &&
+        e.code === 'plan_limit' &&
+        (e.meta as { kind?: string }).kind === 'projects',
     );
   });
 });
