@@ -11,6 +11,13 @@ import { db } from '@/lib/db/repo';
 import { newId, nowIso } from '@/lib/ids';
 import { resetStripeClient } from '@/lib/billing/stripe';
 import {
+  ensureStripeCustomer,
+  __setRetrieveCustomerForTesting,
+  __setCreateCustomerForTesting,
+} from '@/lib/billing/customers';
+import { rethrowStripeBillingError } from '@/lib/billing/stripe-errors';
+import { LIMITS } from '@/lib/rate-limit';
+import {
   PLANS,
   planLimitsFor,
   subscriptionFor,
@@ -55,6 +62,8 @@ function disableBilling() {
   delete process.env.STRIPE_WEBHOOK_SECRET;
   resetStripeClient();
   __setRetrieveSubscriptionForTesting(null);
+  __setRetrieveCustomerForTesting(null);
+  __setCreateCustomerForTesting(null);
 }
 
 function fakeStripeSub(opts: {
@@ -527,5 +536,126 @@ describe('plan limit gate', () => {
     expect(synced.stripe_subscription_id).toBe('sub_past_due');
     expect(resolveTier(synced)).toBe('free');
     expect(isSubscriptionLive(synced)).toBe(false);
+  });
+});
+
+describe('ensureStripeCustomer heal', () => {
+  beforeEach(() => {
+    enableBilling();
+  });
+  afterEach(() => {
+    disableBilling();
+    teardown();
+  });
+
+  it('reuses a customer id that exists under the current Stripe key', async () => {
+    const ctx = await setupContext();
+    const row = await subscriptionFor(ctx.scope, ctx.user.id);
+    await db().update(ctx.scope, 'subscriptions', row.id, {
+      stripe_customer_id: 'cus_live_ok',
+    });
+
+    let createCalls = 0;
+    __setRetrieveCustomerForTesting(async (id) => {
+      expect(id).toBe('cus_live_ok');
+      return { id, object: 'customer', deleted: undefined } as unknown as Stripe.Customer;
+    });
+    __setCreateCustomerForTesting(async () => {
+      createCalls += 1;
+      throw new Error('should not create');
+    });
+
+    const result = await ensureStripeCustomer(ctx.scope, ctx.user);
+    expect(result.customerId).toBe('cus_live_ok');
+    expect(createCalls).toBe(0);
+  });
+
+  it('heals resource_missing customer (test→live leftover) and creates a new one', async () => {
+    const ctx = await setupContext();
+    const row = await subscriptionFor(ctx.scope, ctx.user.id);
+    await db().update(ctx.scope, 'subscriptions', row.id, {
+      tier: 'send',
+      status: 'active',
+      stripe_customer_id: 'cus_test_orphan',
+      stripe_subscription_id: 'sub_test_orphan',
+      current_period_end: new Date(Date.now() + 86400_000).toISOString(),
+    });
+
+    __setRetrieveCustomerForTesting(async () => {
+      const err = Object.assign(new Error("No such customer: 'cus_test_orphan'; a similar object exists in test mode, but a live mode key was used to make this request."), {
+        code: 'resource_missing',
+        statusCode: 404,
+        type: 'StripeInvalidRequestError',
+      });
+      throw err;
+    });
+    __setCreateCustomerForTesting(async (params) => {
+      expect(params.email).toBe(ctx.user.email);
+      expect(params.metadata?.fullsend_user_id).toBe(ctx.user.id);
+      return { id: 'cus_live_new', object: 'customer' } as unknown as Stripe.Customer;
+    });
+
+    const result = await ensureStripeCustomer(ctx.scope, ctx.user);
+    expect(result.customerId).toBe('cus_live_new');
+    expect(result.subscription.stripe_customer_id).toBe('cus_live_new');
+    // Ghost sub tied to missing customer must not poison live mode.
+    expect(result.subscription.stripe_subscription_id).toBeNull();
+    expect(result.subscription.tier).toBe('free');
+    expect(result.subscription.current_period_end).toBeNull();
+  });
+
+  it('creates a customer when none is stored', async () => {
+    const ctx = await setupContext();
+    await subscriptionFor(ctx.scope, ctx.user.id);
+
+    __setRetrieveCustomerForTesting(async () => {
+      throw new Error('retrieve should not run');
+    });
+    __setCreateCustomerForTesting(async () => {
+      return { id: 'cus_brand_new', object: 'customer' } as unknown as Stripe.Customer;
+    });
+
+    const result = await ensureStripeCustomer(ctx.scope, ctx.user);
+    expect(result.customerId).toBe('cus_brand_new');
+  });
+});
+
+describe('billing rate limits and Stripe error mapping', () => {
+  it('LIMITS.billingCheckout is separate from analyze', () => {
+    expect(LIMITS.billingCheckout.limit).toBe(30);
+    expect(LIMITS.billingCheckout.windowMs).toBe(15 * 60 * 1000);
+    expect(LIMITS.billingCheckout.limit).toBeGreaterThan(LIMITS.analyze.limit);
+  });
+
+  it('maps no-such-customer and mode mismatch to FullSendError', () => {
+    try {
+      rethrowStripeBillingError(
+        Object.assign(new Error("No such customer: 'cus_x'"), { code: 'resource_missing' }),
+        'checkout',
+      );
+      throw new Error('expected throw');
+    } catch (e) {
+      expect(isFullSendError(e) && e.code === 'stripe_customer_missing' && e.status === 409).toBe(true);
+    }
+
+    try {
+      rethrowStripeBillingError(
+        new Error('a similar object exists in test mode, but a live mode key was used'),
+        'portal',
+      );
+      throw new Error('expected throw');
+    } catch (e) {
+      expect(isFullSendError(e) && e.code === 'stripe_mode_mismatch' && e.status === 503).toBe(true);
+    }
+
+    try {
+      rethrowStripeBillingError(
+        Object.assign(new Error("No such price: 'price_x'"), { code: 'resource_missing' }),
+        'checkout',
+      );
+      throw new Error('expected throw');
+    } catch (e) {
+      expect(isFullSendError(e) && e.code === 'stripe_price_missing' && e.status === 503).toBe(true);
+    }
   });
 });
