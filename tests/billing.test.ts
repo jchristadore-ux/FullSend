@@ -591,7 +591,8 @@ describe('ensureStripeCustomer heal', () => {
     });
     __setCreateCustomerForTesting(async (params) => {
       expect(params.email).toBe(ctx.user.email);
-      expect(params.metadata?.fullsend_user_id).toBe(ctx.user.id);
+      const meta = params.metadata as Record<string, string> | undefined;
+      expect(meta?.fullsend_user_id).toBe(ctx.user.id);
       return { id: 'cus_live_new', object: 'customer' } as unknown as Stripe.Customer;
     });
 
