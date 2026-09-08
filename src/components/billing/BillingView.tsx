@@ -123,6 +123,11 @@ export function BillingView({ initial }: { initial: StatusPayload | null }) {
     Math.round((status.usage.postsThisMonth.used / Math.max(1, status.usage.postsThisMonth.limit)) * 100),
   );
   const hasStripeSubscription = Boolean(status.subscription?.hasSubscription);
+  // Defense in depth: without a Stripe sub id, never advertise a paid Current plan
+  // (entitled tier + orphan/ghost heal should already make plan Free).
+  const currentPlanName = hasStripeSubscription ? status.plan.name : 'Free';
+  const currentPlanPrice = hasStripeSubscription ? status.plan.priceUsd : 0;
+  const currentPlanStatus = hasStripeSubscription ? status.status : 'active';
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-6 sm:px-8 sm:py-10">
@@ -169,9 +174,9 @@ export function BillingView({ initial }: { initial: StatusPayload | null }) {
       <section className="panel mt-6 p-5">
         <span className="label">Current plan</span>
         <p className="mt-2 font-display text-2xl font-extrabold tracking-tight text-mist">
-          {status.plan.name}
+          {currentPlanName}
           <span className="ml-2 font-sans text-sm font-medium text-dimmer">
-            ${status.plan.priceUsd}/mo · {status.status}
+            ${currentPlanPrice}/mo · {currentPlanStatus}
           </span>
         </p>
         <div className="mt-5 space-y-3">
