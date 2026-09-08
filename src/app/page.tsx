@@ -526,6 +526,9 @@ function Footer() {
             <Link href="/privacy" className="transition-colors hover:text-mist">
               Privacy
             </Link>
+            <Link href="/data-deletion" className="transition-colors hover:text-mist">
+              Data deletion
+            </Link>
             <SignInLink className="transition-colors hover:text-mist" />
           </div>
         </div>
