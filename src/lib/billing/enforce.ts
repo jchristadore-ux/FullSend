@@ -46,9 +46,13 @@ export function upgradeRemedy(detail?: string): string {
 }
 
 export function planLimitError(message: string, meta: Record<string, unknown> = {}): FullSendError {
+  const remedy =
+    meta.kind === 'projects'
+      ? 'Upgrade on Billing, or free a project slot from the Send Center before creating another.'
+      : upgradeRemedy();
   return new FullSendError('plan_limit', message, {
     status: 402,
-    remedy: upgradeRemedy(),
+    remedy,
     meta: { ...meta, upgradePath: '/app/billing' },
   });
 }
@@ -97,11 +101,13 @@ export async function assertCanCreateProject(scope: TenantScope, userId: Uuid): 
   if (subscription.tier !== 'free' && !isSubscriptionLive(subscription)) {
     throw inactiveSubscriptionError(subscription);
   }
+  // Internal FullSend self-marketing must not consume a founder's plan slot.
   const existing = await listProjects(scope, userId);
-  if (existing.length >= limits.projects) {
+  const billable = existing.filter((p) => !p.is_internal);
+  if (billable.length >= limits.projects) {
     throw planLimitError(
       `Your ${tier} plan includes ${limits.projects} project${limits.projects === 1 ? '' : 's'}`,
-      { used: existing.length, limit: limits.projects, kind: 'projects' },
+      { used: billable.length, limit: limits.projects, kind: 'projects' },
     );
   }
 }
