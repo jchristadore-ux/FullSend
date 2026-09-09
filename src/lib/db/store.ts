@@ -30,6 +30,7 @@ import type {
   PublishedPost,
   Recommendation,
   Repository,
+  WebsiteSource,
   ScheduledPost,
   Settings,
   SocialAccount,
@@ -45,6 +46,7 @@ export interface Tables {
   users: User;
   projects: Project;
   repositories: Repository;
+  website_sources: WebsiteSource;
   product_analysis: ProductAnalysis;
   personas: Persona;
   marketing_strategies: MarketingStrategy;
@@ -83,6 +85,7 @@ export const TENANT_KEY: Record<TableName, 'user_id' | 'project_id' | 'none'> = 
   users: 'none',
   projects: 'user_id',
   repositories: 'project_id',
+  website_sources: 'project_id',
   product_analysis: 'project_id',
   personas: 'project_id',
   marketing_strategies: 'project_id',

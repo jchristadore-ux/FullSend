@@ -108,6 +108,11 @@ function compose(task: string, ctx: Ctx, system: string): unknown {
 /* ── Product analysis ───────────────────────────────────────────────────── */
 
 function composeAnalysis(ctx: Ctx): unknown {
+  const website = ctx.website ?? null;
+  const signalsEarly = ctx.signals ?? {};
+  if (website || signalsEarly.headings || signalsEarly.meta_descriptions || signalsEarly.titles) {
+    return composeWebsiteAnalysis(ctx);
+  }
   const repo = ctx.repository ?? {};
   const signals = ctx.signals ?? {};
   const name: string = titleCase(repo.name ?? 'the product');
@@ -183,6 +188,81 @@ function composeAnalysis(ctx: Ctx): unknown {
     confidence: Math.min(
       0.92,
       0.35 + features.length * 0.06 + (readmeSummary ? 0.2 : 0) + (description ? 0.1 : 0),
+    ),
+  };
+}
+
+/** Same schema as composeAnalysis, grounded in fetched page copy. */
+function composeWebsiteAnalysis(ctx: Ctx): unknown {
+  const website = ctx.website ?? {};
+  const signals = ctx.signals ?? {};
+  const host = String(website.final_url ?? website.url ?? 'the product')
+    .replace(/^https?:\/\//i, '')
+    .split('/')[0]
+    .replace(/^www\./i, '');
+  const name = titleCase((host.split('.')[0] || host || 'the product').replace(/[-_]+/g, ' '));
+  const description: string =
+    (signals.meta_descriptions ?? [])[0] ??
+    (signals.titles ?? [])[0] ??
+    '';
+  const textExcerpt: string = (signals.text_excerpt ?? '').slice(0, 1200);
+  const headings: string[] = signals.headings ?? [];
+  const paths: string[] = signals.discovered_paths ?? [];
+
+  const BORING = /^(settings|login|signup|sign-?in|auth|admin|account|profile|privacy|terms|404|error|callback|home|welcome)$/i;
+  const featureSources: { label: string; evidence: string }[] = [
+    ...headings.slice(0, 8).map((h: string) => ({ label: h, evidence: `heading:${h}` })),
+    ...paths
+      .filter((p: string) => p && p !== '/')
+      .slice(0, 6)
+      .map((p: string) => ({ label: routeToFeature(p), evidence: p })),
+  ];
+
+  const seen = new Set<string>();
+  const features = featureSources
+    .filter((f) => {
+      const k = f.label.toLowerCase().trim();
+      if (!k || seen.has(k) || BORING.test(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .slice(0, 8)
+    .map((f) => ({
+      name: titleCase(f.label),
+      description: `${titleCase(f.label)} as described on the product website.`,
+      evidence: [f.evidence],
+      user_facing: true,
+    }));
+
+  const category = inferCategory([], [], description, textExcerpt);
+  const oneLiner =
+    description ||
+    (textExcerpt.split(/[.\n]/)[0] ?? '').trim() ||
+    `${name} — a ${category.toLowerCase()}.`;
+
+  return {
+    one_liner: oneLiner.slice(0, 200),
+    what_it_does:
+      textExcerpt.slice(0, 600) ||
+      `${name} is a ${category.toLowerCase()}. ${features.length ? `It covers ${features.slice(0, 3).map((f) => f.name.toLowerCase()).join(', ')}.` : ''}`.trim(),
+    category,
+    features,
+    not_capabilities: [
+      'Anything not evidenced on the fetched website pages',
+      'Performance, revenue or user-count claims',
+      'Integrations not mentioned on the site',
+    ],
+    tech_stack: [],
+    platforms: ['web'],
+    target_market: inferMarket(category, []),
+    problem_solved:
+      textExcerpt.match(/(?:problem|why|instead of)[^.]{10,200}\./i)?.[0]?.trim() ||
+      problemFor(category, features.map((f) => f.name)),
+    differentiators: buildDifferentiators(name, [], features.map((f) => f.name), []),
+    maturity: 'beta' as const,
+    confidence: Math.min(
+      0.85,
+      0.3 + features.length * 0.06 + (description ? 0.15 : 0) + (textExcerpt ? 0.15 : 0),
     ),
   };
 }

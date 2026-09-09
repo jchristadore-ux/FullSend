@@ -235,7 +235,25 @@ export const trendScanSchema = z.object({ signals: z.array(z.object({
 })).max(20) });
 
 /* ── API input ──────────────────────────────────────────────────────────── */
-export const createProjectInput = z.object({ repository: z.string().min(3).max(300), name: z.string().min(1).max(80).optional(), timezone: z.string().max(60).default('UTC'), autopilot_mode: z.enum(['manual', 'hybrid', 'full_send']).default('full_send') });
+export const createProjectInput = z
+  .object({
+    repository: z.string().min(3).max(300).optional(),
+    website_url: z.string().min(3).max(2048).optional(),
+    name: z.string().min(1).max(80).optional(),
+    timezone: z.string().max(60).default('UTC'),
+    autopilot_mode: z.enum(['manual', 'hybrid', 'full_send']).default('full_send'),
+  })
+  .superRefine((val, ctx) => {
+    const hasRepo = Boolean(val.repository?.trim());
+    const hasSite = Boolean(val.website_url?.trim());
+    if (hasRepo === hasSite) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Provide either a GitHub repository or a website URL, not both or neither',
+        path: hasRepo ? ['website_url'] : ['repository'],
+      });
+    }
+  });
 export const generateCalendarInput = z.object({ days: z.union([z.literal(7), z.literal(14), z.literal(30), z.literal(60), z.literal(90)]), platforms: z.array(platformSchema).min(1).optional() });
 export const approveStrategyInput = z.object({
   positioning: z.string().max(600).optional(), value_proposition: z.string().max(400).optional(), campaign_strategy: z.string().max(1200).optional(), growth_strategy: z.string().max(1200).optional(),

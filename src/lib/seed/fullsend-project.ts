@@ -73,9 +73,9 @@ const SELF_ANALYSIS: Omit<
 > = {
   // Written by hand rather than derived from a commit, so it is keyed to none.
   commit_sha: null,
-  one_liner: 'Give FullSend your app’s repo and it builds and runs the whole marketing machine.',
+  one_liner: 'Give FullSend your app’s GitHub repo or website and it builds and runs the whole marketing machine.',
   what_it_does:
-    'FullSend reads a GitHub repository, works out what the product actually does and who ' +
+    'FullSend reads a GitHub repository or public website, works out what the product actually does and who ' +
     'needs it, builds a marketing strategy, writes the content, generates the creative, ' +
     'connects Instagram and TikTok, schedules everything, publishes on time, reads the ' +
     'results back, and changes what it makes next based on what worked.',
@@ -210,6 +210,8 @@ export async function seedFullSendProject(
       status: 'strategy_ready',
       autopilot_mode: 'full_send',
       timezone: 'UTC',
+      source_type: 'github',
+      website_url: null,
       is_internal: true,
       last_autopilot_run_at: null,
       created_at: nowIso(),

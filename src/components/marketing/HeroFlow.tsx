@@ -18,7 +18,7 @@ type Stage = {
 
 function stagesFor(platformsLabel: string): Stage[] {
   return [
-    { key: 'repo', label: 'GitHub Repo', detail: 'github.com/you/your-app', kind: 'input' },
+    { key: 'repo', label: 'GitHub or Website', detail: 'repo or https://your.app', kind: 'input' },
     { key: 'analysis', label: 'Product Analysis', detail: '9 features · 3 personas', kind: 'work' },
     { key: 'strategy', label: 'Marketing Strategy', detail: '5 pillars · 3 campaigns', kind: 'work' },
     { key: 'accounts', label: platformsLabel, detail: 'Ready to connect', kind: 'work' },

@@ -79,7 +79,7 @@ export default async function SendCenter() {
         </div>
       )}
 
-      {!data.hasAnalysis && <SetupPrompt href="/onboarding" label="Analyze your repository" />}
+      {!data.hasAnalysis && <SetupPrompt href="/onboarding" label="Analyze your GitHub repo or website" />}
       {data.hasAnalysis && !data.strategyApproved && (
         <SetupPrompt href="/app/strategy" label="Approve your strategy to start sending" />
       )}

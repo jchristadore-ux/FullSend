@@ -151,6 +151,10 @@ const checkBrandIdentityMigration = () =>
 const checkGenerationStateMigration = () =>
   checkColumns('content_items', ['generation_state', 'generation_error']);
 
+/** 0007 — without it, website-sourced projects cannot be stored. */
+const checkWebsiteSourceMigration = () =>
+  checkColumns('projects', ['source_type', 'website_url']);
+
 type Storage =
   | { checked: false; reason: string }
   | { checked: true; exists: boolean; public?: boolean; error?: string };
@@ -265,6 +269,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     analysisCommitMigration,
     brandIdentityMigration,
     generationStateMigration,
+    websiteSourceMigration,
     creativeStorage,
     creativeRenderer,
   ] = await Promise.all([
@@ -274,6 +279,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     checkAnalysisCommitMigration(),
     checkBrandIdentityMigration(),
     checkGenerationStateMigration(),
+    checkWebsiteSourceMigration(),
     checkCreativeStorage(),
     /*
      * Can this deployment actually draw text?
@@ -354,6 +360,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         'The generation state columns are missing (supabase/migrations/0006_generation_state.sql). ' +
           `${fix} Without it a post whose creative failed looks exactly like one that worked, and ` +
           'schedules itself with no image.',
+      );
+    }
+    if (websiteSourceMigration.checked && !websiteSourceMigration.applied) {
+      problems.push(
+        'The website source columns are missing (supabase/migrations/0007_website_source.sql). ' +
+          `${fix} Without it FullSend cannot store a website URL as a product source alongside GitHub.`,
       );
     }
     if (creativeStorage.checked && !creativeStorage.exists) {
@@ -451,6 +463,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         analysisCommit: analysisCommitMigration,
         brandIdentity: brandIdentityMigration,
         generationState: generationStateMigration,
+        websiteSource: websiteSourceMigration,
       },
       creativeStorage,
       /** Whether text actually rasterises here, measured rather than assumed. */

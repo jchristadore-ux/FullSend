@@ -87,7 +87,7 @@ function Hero({ platformsLabel }: { platformsLabel: string }) {
             </p>
 
             <p className="mt-4 max-w-xl text-base leading-relaxed text-dim">
-              Connect your GitHub repo and FullSend figures out what your product does, who needs
+              Connect your GitHub repo or website and FullSend figures out what your product does, who needs
               it, what to say, what to post, where to post it, and when to publish it.
             </p>
 
@@ -228,7 +228,7 @@ function HowItWorks({ connectItems }: { connectItems: string[] }) {
     {
       n: '01',
       title: 'Drop in your repo.',
-      body: 'Paste your GitHub repository. FullSend analyzes your product.',
+      body: 'Paste a GitHub repository or website URL. FullSend analyzes your product.',
       items: [] as string[],
     },
     {
