@@ -189,11 +189,17 @@ export const env = {
   },
 
   admin: {
-    /** Comma-separated emails allowed into the FullSend Control Room. */
-    emails: (opt('FULLSEND_ADMIN_EMAILS') ?? '')
-      .split(',')
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean),
+    /**
+     * Comma-separated emails for the Control Room and operator unlimited
+     * plan limits. Getter so tests / late serverless env see live values
+     * (same pattern as stripe.*).
+     */
+    get emails(): string[] {
+      return (opt('FULLSEND_ADMIN_EMAILS') ?? '')
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+    },
   },
 } as const;
 

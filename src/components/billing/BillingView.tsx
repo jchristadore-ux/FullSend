@@ -10,6 +10,8 @@ type StatusPayload = {
   tier: string;
   status: string;
   live: boolean;
+  /** Admin / FULLSEND_ADMIN_EMAILS — uncapped limits, not a Stripe tier. */
+  unlimited?: boolean;
   plan: { name: string; priceUsd: number; limits: {
     projects: number;
     posts_per_month: number;
@@ -118,16 +120,30 @@ export function BillingView({ initial }: { initial: StatusPayload | null }) {
     );
   }
 
-  const postsPct = Math.min(
-    100,
-    Math.round((status.usage.postsThisMonth.used / Math.max(1, status.usage.postsThisMonth.limit)) * 100),
-  );
+  const unlimited = Boolean(status.unlimited);
+  const postsPct = unlimited
+    ? 0
+    : Math.min(
+        100,
+        Math.round(
+          (status.usage.postsThisMonth.used / Math.max(1, status.usage.postsThisMonth.limit)) * 100,
+        ),
+      );
   const hasStripeSubscription = Boolean(status.subscription?.hasSubscription);
   // Defense in depth: without a Stripe sub id, never advertise a paid Current plan
   // (entitled tier + orphan/ghost heal should already make plan Free).
-  const currentPlanName = hasStripeSubscription ? status.plan.name : 'Free';
-  const currentPlanPrice = hasStripeSubscription ? status.plan.priceUsd : 0;
-  const currentPlanStatus = hasStripeSubscription ? status.status : 'active';
+  // Operators keep uncapped limits without inventing a paid Stripe row.
+  const currentPlanName = unlimited
+    ? 'Operator'
+    : hasStripeSubscription
+      ? status.plan.name
+      : 'Free';
+  const currentPlanPrice = unlimited ? 0 : hasStripeSubscription ? status.plan.priceUsd : 0;
+  const currentPlanStatus = unlimited
+    ? 'unlimited'
+    : hasStripeSubscription
+      ? status.status
+      : 'active';
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-6 sm:px-8 sm:py-10">
@@ -171,6 +187,14 @@ export function BillingView({ initial }: { initial: StatusPayload | null }) {
         </div>
       )}
 
+      {unlimited && (
+        <div className="mt-4 border border-ok/40 bg-ok/10 px-4 py-3 text-sm text-mist">
+          Operator access: plan limits are uncapped via admin /{' '}
+          <span className="font-mono text-[11px]">FULLSEND_ADMIN_EMAILS</span>. Stripe
+          subscription (if any) is unchanged.
+        </div>
+      )}
+
       <section className="panel mt-6 p-5">
         <span className="label">Current plan</span>
         <p className="mt-2 font-display text-2xl font-extrabold tracking-tight text-mist">
@@ -184,12 +208,14 @@ export function BillingView({ initial }: { initial: StatusPayload | null }) {
             label="Projects"
             used={status.usage.projects.used}
             limit={status.usage.projects.limit}
+            unlimited={unlimited}
           />
           <UsageBar
             label="Posts this month"
             used={status.usage.postsThisMonth.used}
             limit={status.usage.postsThisMonth.limit}
             pct={postsPct}
+            unlimited={unlimited}
           />
         </div>
         <div className="mt-5 flex flex-wrap gap-3">
@@ -272,19 +298,28 @@ function UsageBar({
   used,
   limit,
   pct,
+  unlimited,
 }: {
   label: string;
   used: number;
   limit: number;
   pct?: number;
+  unlimited?: boolean;
 }) {
-  const width = pct ?? Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
+  const width = unlimited
+    ? 0
+    : (pct ?? Math.min(100, Math.round((used / Math.max(1, limit)) * 100)));
+  const limitLabel = unlimited
+    ? 'Unlimited'
+    : limit === 1000 || limit >= 10_000
+      ? limit.toLocaleString()
+      : String(limit);
   return (
     <div>
       <div className="flex justify-between font-mono text-[11px] text-dimmer">
         <span>{label}</span>
         <span>
-          {used} / {limit === 1000 || limit >= 10_000 ? limit.toLocaleString() : limit}
+          {used} / {limitLabel}
         </span>
       </div>
       <div className="mt-1 h-1.5 overflow-hidden bg-edge">

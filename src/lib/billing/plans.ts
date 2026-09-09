@@ -9,6 +9,10 @@
  * status is active|trialing AND stripe_subscription_id is present. Orphan
  * rows (paid tier, null Stripe sub) and ghost ids (stale/deleted Stripe
  * subscriptions) are treated as free and self-healed on read.
+ *
+ * Operators (`users.is_admin` or FULLSEND_ADMIN_EMAILS) keep normal Stripe
+ * subscription rows but receive uncapped plan limits so creators are never
+ * free-plan gated when Live billing is on.
  */
 import 'server-only';
 import type Stripe from 'stripe';
@@ -60,6 +64,37 @@ export const PLANS: Record<PlanTier, PlanLimits & { name: string; priceUsd: numb
     optimization: true,
   },
 };
+
+/**
+ * Numeric sentinel for operator / admin uncapped limits.
+ * High enough that gates and usage bars treat it as unlimited.
+ */
+export const OPERATOR_UNLIMITED = 1_000_000;
+
+/** Full-product limits for Control Room operators (not a Stripe tier). */
+export const OPERATOR_LIMITS: PlanLimits = {
+  projects: OPERATOR_UNLIMITED,
+  posts_per_month: OPERATOR_UNLIMITED,
+  platforms: ['instagram', 'tiktok'],
+  autopilot_modes: ['manual', 'hybrid', 'full_send'],
+  optimization: true,
+};
+
+/**
+ * Creator / admin bypass: `users.is_admin` OR listed in FULLSEND_ADMIN_EMAILS.
+ * Does not invent a paid Stripe subscription — only lifts plan caps.
+ */
+export function isOperatorUnlimited(user: {
+  is_admin: boolean;
+  email: string;
+}): boolean {
+  if (user.is_admin) return true;
+  return env.admin.emails.includes(user.email.toLowerCase());
+}
+
+export function isUnlimitedCap(n: number): boolean {
+  return n >= OPERATOR_UNLIMITED;
+}
 
 const PAID_TIERS = new Set<PlanTier>(['send', 'full_send', 'agency']);
 const LIVE_STATUSES = new Set(['active', 'trialing']);
