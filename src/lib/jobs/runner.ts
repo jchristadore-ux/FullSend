@@ -7,7 +7,7 @@ import { nowIso } from '../ids';
 import { queueStamp } from './clock';
 import { reportJobFailure } from '../ops/report-failure';
 import { logger } from '../logger';
-import { systemAnalyzeProduct } from '../analysis/analyze';
+import { systemAnalyzeProduct, systemAnalyzeWebsiteProduct } from '../analysis/analyze';
 import { buildStrategy, ensureBrandProfile } from '../strategy/build';
 import { collectAnalytics } from '../analytics/collect';
 import { optimize } from '../optimizer/optimize';
@@ -54,11 +54,18 @@ const handlers: Record<JobType, Handler> = {
     const scope = systemScope('job:analyze_repository'); const projectId = String(job.payload.projectId); const project = await db().get(scope, 'projects', projectId); if (!project) throw new Error(`Project ${projectId} not found`);
     await db().update(scope, 'projects', projectId, { status: 'analyzing' });
     try {
-      const result = await systemAnalyzeProduct(project, String(job.payload.repository), job.payload.githubToken ? String(job.payload.githubToken) : undefined, { refresh: Boolean(job.payload.refresh) });
+      const refresh = Boolean(job.payload.refresh);
+      const websiteUrl =
+        job.payload.websiteUrl ? String(job.payload.websiteUrl)
+        : project.source_type === 'website' && project.website_url ? project.website_url
+        : null;
+      const result = websiteUrl
+        ? await systemAnalyzeWebsiteProduct(project, websiteUrl, { refresh })
+        : await systemAnalyzeProduct(project, String(job.payload.repository), job.payload.githubToken ? String(job.payload.githubToken) : undefined, { refresh });
       await db().update(scope, 'projects', projectId, { status: 'analyzed', updated_at: nowIso() });
-      const key = `${projectId}:strategy:${Boolean(job.payload.refresh)}`;
-      await enqueueOnce(scope, 'generate_strategy', { projectId, refresh: Boolean(job.payload.refresh), idempotencyKey: key }, { projectId, dedupeKey: key });
-      return { analysisId: result.analysis.id, features: result.analysis.features.length, costUsd: result.costUsd, reused: !result.ran.analysis };
+      const key = `${projectId}:strategy:${refresh}`;
+      await enqueueOnce(scope, 'generate_strategy', { projectId, refresh, idempotencyKey: key }, { projectId, dedupeKey: key });
+      return { analysisId: result.analysis.id, features: result.analysis.features.length, costUsd: result.costUsd, reused: !result.ran.analysis, source: websiteUrl ? 'website' : 'github' };
     } catch (e) { const kept = await getAnalysis(scope, projectId).catch(() => null); await db().update(scope, 'projects', projectId, { status: kept ? 'analyzed' : 'failed' }); throw e; }
   },
   generate_strategy: async (job) => {

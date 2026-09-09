@@ -70,6 +70,8 @@ export async function createProject(
     status: 'created',
     autopilot_mode: 'full_send',
     timezone: 'UTC',
+    source_type: 'github',
+    website_url: null,
     is_internal: false,
     last_autopilot_run_at: null,
     created_at: nowIso(),

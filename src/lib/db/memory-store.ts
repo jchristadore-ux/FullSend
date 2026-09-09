@@ -33,6 +33,7 @@ type Row = Record<string, unknown> & { id: Uuid };
 const UNIQUE_INDEXES: Partial<Record<TableName, string[][]>> = {
   published_posts: [['scheduled_post_id'], ['platform', 'external_id']],
   content_items: [['project_id', 'dedup_hash']],
+  website_sources: [['project_id']],
 };
 
 export class MemoryStore implements Store {

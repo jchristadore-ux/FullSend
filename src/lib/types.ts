@@ -56,6 +56,8 @@ export type ProjectStatus =
 
 export type AutopilotMode = 'manual' | 'hybrid' | 'full_send';
 
+export type ProjectSourceType = 'github' | 'website';
+
 export interface Project {
   id: Uuid;
   user_id: Uuid;
@@ -64,6 +66,15 @@ export interface Project {
   status: ProjectStatus;
   autopilot_mode: AutopilotMode;
   timezone: string;
+  /**
+   * How FullSend learned what the product is.
+   *
+   * GitHub is the original path; website is a parallel ingest of a public
+   * marketing page. Existing projects default to github.
+   */
+  source_type: ProjectSourceType;
+  /** Set when source_type is website. Null for GitHub projects. */
+  website_url: string | null;
   /** Marks FullSend's own internal project, which markets FullSend itself. */
   is_internal: boolean;
   last_autopilot_run_at: IsoDate | null;
@@ -91,6 +102,24 @@ export interface Repository {
   created_at: IsoDate;
 }
 
+/**
+ * Last successful fetch of a project's website source.
+ *
+ * Plays the same role repositories play for GitHub: identity for resume /
+ * re-analysis, and a home for the raw signals the analyst reads.
+ */
+export interface WebsiteSource {
+  id: Uuid;
+  project_id: Uuid;
+  url: string;
+  final_url: string | null;
+  title: string | null;
+  content_hash: string | null;
+  signals: Record<string, unknown>;
+  last_fetched_at: IsoDate | null;
+  created_at: IsoDate;
+}
+
 /* ── Product understanding ──────────────────────────────────────────────── */
 
 export interface ProductFeature {
@@ -104,7 +133,8 @@ export interface ProductFeature {
 export interface ProductAnalysis {
   id: Uuid;
   project_id: Uuid;
-  repository_id: Uuid;
+  /** Null when the analysis was grounded in a website rather than a repo. */
+  repository_id: Uuid | null;
   /**
    * The commit this understanding was derived from.
    *

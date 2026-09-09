@@ -1,7 +1,7 @@
 import { newId, nowIso } from '../ids';
 import { queueStamp } from '../jobs/clock';
 import { isStalled } from '../jobs/job-failure';
-import type { AiUsageRecord, AnalyticsSnapshot, AuditLogEntry, AutomationError, AutomationRun, BrandProfile, Campaign, ContentItem, ContentPillar, ContentStatus, CreativeAsset, Job, JobType, MarketingStrategy, Notification, Persona, Platform, ProductAnalysis, Project, PublishedPost, Recommendation, Repository, ScheduledPost, Settings, SocialAccount, TrendSignal, User, Uuid, WeeklyReport } from '../types';
+import type { AiUsageRecord, AnalyticsSnapshot, AuditLogEntry, AutomationError, AutomationRun, BrandProfile, Campaign, ContentItem, ContentPillar, ContentStatus, CreativeAsset, Job, JobType, MarketingStrategy, Notification, Persona, Platform, ProductAnalysis, Project, PublishedPost, Recommendation, Repository, WebsiteSource, ScheduledPost, Settings, SocialAccount, TrendSignal, User, Uuid, WeeklyReport } from '../types';
 import { getStore, type Store, type TenantScope } from './index';
 
 export function db(): Store { return getStore(); }
@@ -10,6 +10,7 @@ export async function listProjects(scope: TenantScope, userId?: Uuid): Promise<P
 export async function getProject(scope: TenantScope, id: Uuid): Promise<Project | null> { return db().get(scope, 'projects', id); }
 export async function updateProject(scope: TenantScope, id: Uuid, patch: Partial<Project>): Promise<Project> { return db().update(scope, 'projects', id, { ...patch, updated_at: nowIso() }); }
 export async function getRepository(scope: TenantScope, projectId: Uuid): Promise<Repository | null> { return db().findOne(scope, 'repositories', { where: { project_id: projectId } }); }
+export async function getWebsiteSource(scope: TenantScope, projectId: Uuid): Promise<WebsiteSource | null> { return db().findOne(scope, 'website_sources', { where: { project_id: projectId } }); }
 export async function getAnalysis(scope: TenantScope, projectId: Uuid): Promise<ProductAnalysis | null> { return db().findOne(scope, 'product_analysis', { where: { project_id: projectId }, orderBy: 'created_at', direction: 'desc' }); }
 export async function listPersonas(scope: TenantScope, projectId: Uuid): Promise<Persona[]> { return db().find(scope, 'personas', { where: { project_id: projectId }, orderBy: 'priority', direction: 'asc' }); }
 export async function getStrategy(scope: TenantScope, projectId: Uuid): Promise<MarketingStrategy | null> { return db().findOne(scope, 'marketing_strategies', { where: { project_id: projectId }, orderBy: 'version', direction: 'desc' }); }

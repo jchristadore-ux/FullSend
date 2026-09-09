@@ -10,6 +10,7 @@ import 'server-only';
 import { type TenantScope } from '../db';
 import { db, getRepository, listProjects } from '../db/repo';
 import { parseRepoInput } from '../github/client';
+import { canonicalWebsiteUrl } from '../website/url';
 import type { Project, Uuid } from '../types';
 
 /**
@@ -35,6 +36,7 @@ export async function findProjectForRepo(
   }
 
   for (const project of await listProjects(scope, userId)) {
+    if (project.source_type === 'website') continue;
     const repository = await getRepository(scope, project.id);
     if (repository) {
       if (`${repository.owner}/${repository.name}`.toLowerCase() === wanted) return project;
@@ -49,6 +51,52 @@ export async function findProjectForRepo(
     });
     const named = String(jobs[0]?.payload?.repository ?? '').toLowerCase();
     if (named && named === wanted) return project;
+  }
+  return null;
+}
+
+/**
+ * The project already working on this website, if there is one.
+ *
+ * Matched on the project's website_url first, then on the analysis job payload
+ * for runs that died before the project row was fully usable.
+ */
+export async function findProjectForWebsite(
+  scope: TenantScope,
+  userId: Uuid,
+  websiteInput: string,
+): Promise<Project | null> {
+  let wanted: string;
+  try {
+    wanted = canonicalWebsiteUrl(websiteInput).toLowerCase();
+  } catch {
+    return null;
+  }
+
+  for (const project of await listProjects(scope, userId)) {
+    if (project.source_type === 'website' && project.website_url) {
+      try {
+        if (canonicalWebsiteUrl(project.website_url).toLowerCase() === wanted) return project;
+      } catch {
+        /* ignore malformed stored values */
+      }
+    }
+
+    const jobs = await db().find(scope, 'jobs', {
+      where: { project_id: project.id, type: 'analyze_repository' },
+      orderBy: 'created_at',
+      direction: 'desc',
+      limit: 1,
+    });
+    const named = jobs[0]?.payload?.websiteUrl
+      ? String(jobs[0].payload.websiteUrl)
+      : '';
+    if (!named) continue;
+    try {
+      if (canonicalWebsiteUrl(named).toLowerCase() === wanted) return project;
+    } catch {
+      /* ignore */
+    }
   }
   return null;
 }

@@ -80,7 +80,7 @@ export interface PipelineState {
 }
 
 const LABELS: Record<StageName, string> = {
-  analysis: 'Repository Analysis',
+  analysis: 'Product Analysis',
   marketing_plan: 'Marketing Plan',
   content: 'Content',
   schedule: 'Publishing Schedule',
@@ -301,10 +301,25 @@ export async function stagePayload(
   const base: Record<string, unknown> = { projectId: project.id };
   if (stage !== 'analysis') return base;
 
+  if (project.source_type === 'website' && project.website_url) {
+    return { ...base, websiteUrl: project.website_url };
+  }
+
   const repository = await db().findOne(scope, 'repositories', {
     where: { project_id: project.id },
   });
-  return repository ? { ...base, repository: `${repository.owner}/${repository.name}` } : base;
+  if (repository) return { ...base, repository: `${repository.owner}/${repository.name}` };
+
+  const jobs = await db().find(scope, 'jobs', {
+    where: { project_id: project.id, type: 'analyze_repository' },
+    orderBy: 'created_at',
+    direction: 'desc',
+    limit: 1,
+  });
+  const payload = jobs[0]?.payload ?? {};
+  if (payload.websiteUrl) return { ...base, websiteUrl: String(payload.websiteUrl) };
+  if (payload.repository) return { ...base, repository: String(payload.repository) };
+  return base;
 }
 
 export type { Uuid };

@@ -44,6 +44,9 @@ type Phase = 'input' | 'working' | 'done' | 'error';
 
 interface AnalyzeState {
   status: string;
+  source_type?: 'github' | 'website';
+  website_url?: string | null;
+  website?: { title: string | null; final_url: string | null; url: string } | null;
   repository: Repository | null;
   analysis: ProductAnalysis | null;
   screenshots: { withImages: number; describedOnly: number; note: string } | null;
@@ -78,7 +81,9 @@ function progressSignature(stages: { status: string; detail: string | null }[]):
 export function OnboardingFlow({ capabilities }: { capabilities: Capabilities }) {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('input');
+  const [sourceMode, setSourceMode] = useState<'github' | 'website'>('github');
   const [repo, setRepo] = useState('');
+  const [websiteUrl, setWebsiteUrl] = useState('');
   const [projectId, setProjectId] = useState<string | null>(null);
   const [state, setState] = useState<AnalyzeState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -170,10 +175,14 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
     movedAtRef.current = Date.now();
 
     try {
+      const payload =
+        sourceMode === 'website'
+          ? { website_url: websiteUrl, timezone: guessTimezone() }
+          : { repository: repo, timezone: guessTimezone() };
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repository: repo, timezone: guessTimezone() }),
+        body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -199,24 +208,75 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
           What&rsquo;s your app?
         </h1>
         <p className="mt-5 text-lg text-dim">
-          Paste your GitHub repository. FullSend reads the code, works out what your product
-          actually does, and builds the marketing from there.
+          Paste a GitHub repository or a website URL. FullSend reads what your product actually
+          does and builds the marketing from there.
         </p>
 
         <form onSubmit={analyze} className="mt-9">
-          <label htmlFor="repo" className="label">
-            Paste your GitHub repository
-          </label>
-          <input
-            id="repo"
-            value={repo}
-            onChange={(e) => setRepo(e.target.value)}
-            placeholder="https://github.com/you/your-app"
-            autoFocus
-            autoComplete="off"
-            spellCheck={false}
-            className="mt-2 w-full !px-4 !py-4 font-mono text-base"
-          />
+          <div className="flex gap-2" role="tablist" aria-label="Product source">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sourceMode === 'github'}
+              onClick={() => setSourceMode('github')}
+              className={[
+                'border px-3 py-2 font-mono text-xs font-bold uppercase tracking-wider',
+                sourceMode === 'github'
+                  ? 'border-orange bg-orange/15 text-orange'
+                  : 'border-edge bg-charcoal text-dim',
+              ].join(' ')}
+            >
+              GitHub
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sourceMode === 'website'}
+              onClick={() => setSourceMode('website')}
+              className={[
+                'border px-3 py-2 font-mono text-xs font-bold uppercase tracking-wider',
+                sourceMode === 'website'
+                  ? 'border-orange bg-orange/15 text-orange'
+                  : 'border-edge bg-charcoal text-dim',
+              ].join(' ')}
+            >
+              Website URL
+            </button>
+          </div>
+
+          {sourceMode === 'github' ? (
+            <>
+              <label htmlFor="repo" className="label mt-5 block">
+                Paste your GitHub repository
+              </label>
+              <input
+                id="repo"
+                value={repo}
+                onChange={(e) => setRepo(e.target.value)}
+                placeholder="https://github.com/you/your-app"
+                autoFocus
+                autoComplete="off"
+                spellCheck={false}
+                className="mt-2 w-full !px-4 !py-4 font-mono text-base"
+              />
+            </>
+          ) : (
+            <>
+              <label htmlFor="website" className="label mt-5 block">
+                Paste your product website
+              </label>
+              <input
+                id="website"
+                value={websiteUrl}
+                onChange={(e) => setWebsiteUrl(e.target.value)}
+                placeholder="https://yourproduct.com"
+                autoFocus
+                autoComplete="off"
+                spellCheck={false}
+                className="mt-2 w-full !px-4 !py-4 font-mono text-base"
+              />
+            </>
+          )}
 
           {error && (
             <div className="mt-4 border border-fail/50 bg-fail/10 px-4 py-3">
@@ -225,7 +285,13 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
             </div>
           )}
 
-          <button type="submit" disabled={repo.trim().length < 3} className="btn-send mt-5 text-base">
+          <button
+            type="submit"
+            disabled={
+              sourceMode === 'github' ? repo.trim().length < 3 : websiteUrl.trim().length < 3
+            }
+            className="btn-send mt-5 text-base"
+          >
             ANALYZE IT →
           </button>
         </form>
@@ -234,6 +300,7 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
           <p className="label">What FullSend can do right now</p>
           <ul className="mt-3 space-y-1.5">
             <Capability ok={capabilities.github} label="Read public GitHub repositories" />
+            <Capability ok={true} label="Read public product websites" />
             <Capability
               ok={capabilities.ai}
               label="Analyse with a language model"
@@ -265,7 +332,13 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
       <div className="animate-throttle-in">
         <p className="label text-orange">FULLSEND IS LOOKING UNDER THE HOOD…</p>
         <h1 className="mt-4 font-display text-4xl font-extrabold leading-[0.95] tracking-crush text-mist sm:text-5xl">
-          Reading {state?.repository?.name ?? 'your repository'}
+          Reading{' '}
+          {state?.source_type === 'website' || sourceMode === 'website'
+            ? state?.website?.title ||
+              state?.website_url ||
+              websiteUrl ||
+              'your website'
+            : state?.repository?.name ?? 'your repository'}
         </h1>
 
         <ol className="mt-10 space-y-0">

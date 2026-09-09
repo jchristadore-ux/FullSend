@@ -291,16 +291,27 @@ export function screenshotAvailability(analysis: ProductAnalysis): {
 } {
   const withImages = analysis.screens.filter((s) => s.image_url).length;
   const describedOnly = analysis.screens.length - withImages;
-  const homepage = (analysis.raw_signals as any)?.homepage ?? null;
+  const raw = analysis.raw_signals as {
+    homepage?: string | null;
+    source?: string;
+    final_url?: string;
+    website_url?: string;
+  };
+  const homepage =
+    raw?.homepage ??
+    (raw?.source === 'website' ? raw.final_url ?? raw.website_url ?? null : null);
+  const fromWebsite = raw?.source === 'website';
   return {
     withImages,
     describedOnly,
     liveCaptureTarget: homepage,
     note: withImages
       ? `${withImages} screenshot${withImages === 1 ? '' : 's'} found in the repository and ready to use as creative.`
-      : homepage
-        ? `No screenshots committed to the repo. ${homepage} is set as the homepage and can be captured for demo creative.`
-        : 'No screenshots in the repo and no homepage set. Demo content will be built from the described screens; add screenshots to the repo or set a homepage to get real product visuals.',
+      : fromWebsite && homepage
+        ? `Product understanding came from ${homepage}. Demo content will use copy and sections from the site until product screenshots are added.`
+        : homepage
+          ? `No screenshots committed to the repo. ${homepage} is set as the homepage and can be captured for demo creative.`
+          : 'No screenshots in the repo and no homepage set. Demo content will be built from the described screens; add screenshots to the repo or set a homepage to get real product visuals.',
   };
 }
 
@@ -325,6 +336,212 @@ export async function systemAnalyzeProduct(
 ): Promise<ProductResult> {
   return analyzeProduct(systemScope('background analysis'), project, repositoryInput, {
     githubToken,
+    refresh: opts.refresh,
+  });
+}
+
+/* ── Website product source ─────────────────────────────────────────────── */
+
+const WEBSITE_ANALYST_SYSTEM = `You are FullSend's product analyst.
+
+You are given pages fetched from a public product website: titles, meta
+descriptions, headings, and text excerpts. Your job is to work out what the
+product actually is, so that everything FullSend markets about it is true.
+
+Rules that matter more than eloquence:
+- Only list a feature if the supplied page evidence supports it. Cite the
+  evidence as a URL path or heading from the fetch (e.g. "/pricing", "h1: …").
+- If the website does not show something, it is not a feature.
+- Fill "not_capabilities" with things the product plausibly gets confused with
+  but does NOT do, plus any claim category that cannot be substantiated
+  (performance numbers, user counts, revenue, integrations not mentioned).
+- "confidence" is a number between 0 and 1, and should be honest: a thin landing
+  page with little copy means something around 0.3, not 0.9. Never a word, never
+  a percentage — 0.35, not "low" and not "35%".
+- Write "one_liner" the way the founder would say it out loud, not as marketing copy.
+- tech_stack may be empty when the site does not reveal implementation details.
+
+Return JSON only.`;
+
+export interface WebsiteProductResult {
+  website: WebsiteSourceRow;
+  analysis: ProductAnalysis;
+  costUsd: number;
+  ran: { ingest: boolean; analysis: boolean };
+}
+
+/** Narrow row shape persisted for website sources (matches Tables.website_sources). */
+interface WebsiteSourceRow {
+  id: string;
+  project_id: string;
+  url: string;
+  final_url: string | null;
+  title: string | null;
+  content_hash: string | null;
+  signals: Record<string, unknown>;
+  last_fetched_at: string | null;
+  created_at: string;
+}
+
+/**
+ * Step one for a website-sourced project: fetch public HTML and analyse it.
+ *
+ * Checkpointed on content hash the way GitHub analyses are checkpointed on
+ * commit SHA — the same page body is never paid for twice unless refresh is set.
+ */
+export async function analyzeWebsiteProduct(
+  scope: TenantScope,
+  project: Project,
+  websiteInput: string,
+  opts: { refresh?: boolean; ingest?: typeof import('../website/ingest').ingestWebsite } = {},
+): Promise<WebsiteProductResult> {
+  const { ingestWebsite } = await import('../website/ingest');
+  const { canonicalWebsiteUrl } = await import('../website/url');
+  const ingest = opts.ingest ?? ingestWebsite;
+
+  const wanted = canonicalWebsiteUrl(websiteInput);
+  const existingSource = await db().findOne(scope, 'website_sources', {
+    where: { project_id: project.id },
+  });
+  const analysis = opts.refresh ? null : await getAnalysis(scope, project.id);
+
+  if (
+    !opts.refresh &&
+    existingSource &&
+    analysis &&
+    analysis.repository_id === null &&
+    existingSource.content_hash &&
+    (analysis.raw_signals as { content_hash?: string } | null)?.content_hash ===
+      existingSource.content_hash
+  ) {
+    log.info('reusing the existing website product analysis', {
+      project: project.id,
+      hash: existingSource.content_hash,
+    });
+    return {
+      website: existingSource,
+      analysis,
+      costUsd: 0,
+      ran: { ingest: false, analysis: false },
+    };
+  }
+
+  log.info('analysing website', { project: project.id, url: wanted });
+  const bundle = await ingest(wanted);
+  const saved = await upsertWebsiteSource(scope, project.id, bundle);
+  const result = await runWebsiteAnalysis(scope, project, saved, bundle);
+
+  return {
+    website: saved,
+    analysis: result.analysis,
+    costUsd: result.cost,
+    ran: { ingest: true, analysis: true },
+  };
+}
+
+async function upsertWebsiteSource(
+  scope: TenantScope,
+  projectId: Uuid,
+  bundle: import('../website/ingest').WebsiteBundle,
+): Promise<WebsiteSourceRow> {
+  const existing = await db().findOne(scope, 'website_sources', {
+    where: { project_id: projectId },
+  });
+  const patch = {
+    url: bundle.url,
+    final_url: bundle.finalUrl,
+    title: bundle.title,
+    content_hash: bundle.contentHash,
+    signals: bundle.signals as unknown as Record<string, unknown>,
+    last_fetched_at: nowIso(),
+  };
+  if (existing) return db().update(scope, 'website_sources', existing.id, patch);
+  return db().insert(scope, 'website_sources', {
+    id: newId(),
+    project_id: projectId,
+    created_at: nowIso(),
+    ...patch,
+  });
+}
+
+async function runWebsiteAnalysis(
+  scope: TenantScope,
+  project: Project,
+  website: WebsiteSourceRow,
+  bundle: import('../website/ingest').WebsiteBundle,
+): Promise<{ analysis: ProductAnalysis; cost: number }> {
+  const { data, costUsd } = await generateObject({
+    task: 'analysis.product',
+    system: WEBSITE_ANALYST_SYSTEM,
+    brief: `Work out what the product at ${bundle.finalUrl} actually is.`,
+    context: {
+      website: {
+        url: bundle.url,
+        final_url: bundle.finalUrl,
+        title: bundle.title,
+      },
+      signals: {
+        titles: bundle.signals.titles,
+        meta_descriptions: bundle.signals.meta_descriptions,
+        headings: bundle.signals.headings.slice(0, 40),
+        text_excerpt: bundle.signals.text_excerpt.slice(0, 5000),
+        pages: bundle.signals.pages.map((p) => ({
+          url: p.url,
+          title: p.title,
+          meta_description: p.meta_description,
+          headings: p.headings.slice(0, 20),
+          text_excerpt: p.text_excerpt.slice(0, 1500),
+        })),
+        discovered_paths: bundle.signals.discovered_paths,
+      },
+      detected_screens: bundle.screens.map((s) => ({
+        name: s.name,
+        route: s.route,
+        elements: s.key_elements,
+      })),
+    },
+    schema: productAnalysisSchema,
+    attribution: { scope, projectId: project.id, userId: project.user_id },
+  });
+
+  const analysis = await db().insert(scope, 'product_analysis', {
+    id: newId(),
+    project_id: project.id,
+    repository_id: null,
+    one_liner: data.one_liner,
+    what_it_does: data.what_it_does,
+    category: data.category,
+    features: data.features,
+    not_capabilities: data.not_capabilities,
+    tech_stack: data.tech_stack,
+    platforms: data.platforms,
+    target_market: data.target_market,
+    problem_solved: data.problem_solved,
+    differentiators: data.differentiators,
+    maturity: data.maturity,
+    screens: bundle.screens,
+    confidence: data.confidence,
+    raw_signals: {
+      source: 'website',
+      website_url: bundle.url,
+      final_url: bundle.finalUrl,
+      content_hash: bundle.contentHash,
+      signals: bundle.signals,
+    },
+    // Content hash rides in raw_signals; commit_sha stays null for websites.
+    commit_sha: null,
+    created_at: nowIso(),
+  });
+
+  return { analysis, cost: costUsd };
+}
+
+export async function systemAnalyzeWebsiteProduct(
+  project: Project,
+  websiteInput: string,
+  opts: { refresh?: boolean } = {},
+): Promise<WebsiteProductResult> {
+  return analyzeWebsiteProduct(systemScope('background analysis'), project, websiteInput, {
     refresh: opts.refresh,
   });
 }
