@@ -2,7 +2,8 @@
  * Stripe billing: plan resolution, webhook snapshots, and one hard limit gate.
  *
  * Billing off → full product. Billing on → free limits bite; paid needs
- * active|trialing. Webhooks update the subscriptions row idempotently.
+ * active|trialing. Operators (is_admin / FULLSEND_ADMIN_EMAILS) stay uncapped.
+ * Webhooks update the subscriptions row idempotently.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type Stripe from 'stripe';
@@ -24,6 +25,8 @@ import {
   tierForPriceId,
   billingEnabled,
   entitledTier,
+  isOperatorUnlimited,
+  OPERATOR_LIMITS,
   __setRetrieveSubscriptionForTesting,
 } from '@/lib/billing/plans';
 import {
@@ -31,6 +34,7 @@ import {
   isSubscriptionLive,
   assertCanCreateProject,
   assertCanUsePosts,
+  loadAccess,
 } from '@/lib/billing/enforce';
 import {
   applySubscriptionSnapshot,
@@ -60,6 +64,7 @@ function disableBilling() {
   delete process.env.STRIPE_PRICE_FULL_SEND;
   delete process.env.STRIPE_PRICE_AGENCY;
   delete process.env.STRIPE_WEBHOOK_SECRET;
+  delete process.env.FULLSEND_ADMIN_EMAILS;
   resetStripeClient();
   __setRetrieveSubscriptionForTesting(null);
   __setRetrieveCustomerForTesting(null);
@@ -536,6 +541,105 @@ describe('plan limit gate', () => {
     expect(synced.stripe_subscription_id).toBe('sub_past_due');
     expect(resolveTier(synced)).toBe('free');
     expect(isSubscriptionLive(synced)).toBe(false);
+  });
+});
+
+
+describe('operator unlimited entitlements', () => {
+  beforeEach(() => {
+    enableBilling();
+  });
+  afterEach(() => {
+    disableBilling();
+    teardown();
+  });
+
+  it('is_admin bypasses free project cap when billing is on', async () => {
+    const ctx = await setupContext('creator@example.com');
+    await db().update(ctx.scope, 'users', ctx.user.id, { is_admin: true });
+    await subscriptionFor(ctx.scope, ctx.user.id);
+
+    await createProject(ctx.scope, ctx.user.id);
+    // Free plan would block a second project; admin must not be gated.
+    await expect(assertCanCreateProject(ctx.scope, ctx.user.id)).resolves.toBeUndefined();
+    await createProject(ctx.scope, ctx.user.id, {
+      slug: 'second-app',
+      name: 'Second App',
+    });
+    await createProject(ctx.scope, ctx.user.id, {
+      slug: 'third-app',
+      name: 'Third App',
+    });
+    await expect(assertCanCreateProject(ctx.scope, ctx.user.id)).resolves.toBeUndefined();
+
+    const access = await loadAccess(ctx.scope, ctx.user.id);
+    expect(access.unlimited).toBe(true);
+    expect(access.limits.projects).toBe(OPERATOR_LIMITS.projects);
+    expect(access.limits.posts_per_month).toBe(OPERATOR_LIMITS.posts_per_month);
+    // Stripe-entitled tier stays free — we do not invent a paid subscription.
+    expect(access.tier).toBe('free');
+  });
+
+  it('FULLSEND_ADMIN_EMAILS grants unlimited without is_admin flag', async () => {
+    process.env.FULLSEND_ADMIN_EMAILS = 'ops@example.com,other@example.com';
+    const ctx = await setupContext('ops@example.com');
+    expect(ctx.user.is_admin).toBe(false);
+    expect(isOperatorUnlimited(ctx.user)).toBe(true);
+
+    await subscriptionFor(ctx.scope, ctx.user.id);
+    await createProject(ctx.scope, ctx.user.id);
+    await expect(assertCanCreateProject(ctx.scope, ctx.user.id)).resolves.toBeUndefined();
+
+    const project = await createProject(ctx.scope, ctx.user.id, {
+      slug: 'ops-second',
+      name: 'Ops Second',
+    });
+    // Posts allowance also uncapped for operators.
+    await expect(
+      assertCanUsePosts(ctx.scope, ctx.user.id, project.id, { action: 'generate', count: 50 }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('non-admin free users stay capped; paid Stripe entitlements unchanged', async () => {
+    process.env.FULLSEND_ADMIN_EMAILS = 'someone-else@example.com';
+    const freeCtx = await setupContext('regular@example.com');
+    expect(isOperatorUnlimited(freeCtx.user)).toBe(false);
+    await subscriptionFor(freeCtx.scope, freeCtx.user.id);
+    await createProject(freeCtx.scope, freeCtx.user.id);
+    await expect(assertCanCreateProject(freeCtx.scope, freeCtx.user.id)).rejects.toSatisfy(
+      (e: unknown) => isFullSendError(e) && e.code === 'plan_limit',
+    );
+
+    // Fresh paid user still gets live Stripe limits (full_send = 1 project).
+    teardown();
+    enableBilling();
+    const paidCtx = await setupContext('paid@example.com');
+    const row = await subscriptionFor(paidCtx.scope, paidCtx.user.id);
+    await db().update(paidCtx.scope, 'subscriptions', row.id, {
+      tier: 'full_send',
+      status: 'active',
+      stripe_subscription_id: 'sub_paid_limits',
+      stripe_customer_id: 'cus_paid_limits',
+    });
+    __setRetrieveSubscriptionForTesting(async () =>
+      fakeStripeSub({
+        id: 'sub_paid_limits',
+        customer: 'cus_paid_limits',
+        priceId: PRICE_FULL,
+        status: 'active',
+      }),
+    );
+    const access = await loadAccess(paidCtx.scope, paidCtx.user.id);
+    expect(access.unlimited).toBe(false);
+    expect(access.tier).toBe('full_send');
+    expect(access.limits.posts_per_month).toBe(1000);
+    await createProject(paidCtx.scope, paidCtx.user.id);
+    await expect(assertCanCreateProject(paidCtx.scope, paidCtx.user.id)).rejects.toSatisfy(
+      (e: unknown) =>
+        isFullSendError(e) &&
+        e.code === 'plan_limit' &&
+        (e.meta as { kind?: string }).kind === 'projects',
+    );
   });
 });
 

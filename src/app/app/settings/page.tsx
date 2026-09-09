@@ -31,7 +31,7 @@ export default async function SettingsPage() {
       spend={spend}
       plan={{
         tier: access.tier,
-        name: PLANS[access.tier].name,
+        name: access.unlimited ? 'Operator' : PLANS[access.tier].name,
         billingEnabled: access.billingOn,
       }}
       capabilities={capabilities()}

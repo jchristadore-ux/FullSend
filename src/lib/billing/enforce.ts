@@ -4,6 +4,10 @@
  * When Stripe is not configured, every check is a no-op and the product runs
  * wide open. With billing on, free limits apply; paid tiers need an
  * active/trialing Stripe subscription (stripe_subscription_id present).
+ *
+ * Operators (`users.is_admin` or FULLSEND_ADMIN_EMAILS) get uncapped limits
+ * even when their Stripe row is free / unpaid — creators must not be blocked
+ * by free-plan project caps when Live billing is on.
  */
 import 'server-only';
 import { type TenantScope } from '../db';
@@ -13,6 +17,8 @@ import type { PlanLimits, PlanTier, Subscription, Uuid } from '../types';
 import {
   billingEnabled,
   entitledTier,
+  isOperatorUnlimited,
+  OPERATOR_LIMITS,
   planLimitsFor,
   postsThisMonth,
   subscriptionFor,
@@ -25,6 +31,7 @@ const PAID_OK = new Set(['active', 'trialing']);
  *
  * Delegates to entitledTier: billing off → agency; paid only with live Stripe
  * sub; otherwise free (including orphan pre-Stripe paid rows).
+ * Operator unlimited is applied separately in loadAccess (does not change tier).
  */
 export function resolveTier(subscription: Subscription): PlanTier {
   return entitledTier(subscription);
@@ -79,21 +86,38 @@ export async function loadAccess(
   tier: PlanTier;
   limits: PlanLimits;
   billingOn: boolean;
+  /** True when admin / FULLSEND_ADMIN_EMAILS grants uncapped limits. */
+  unlimited: boolean;
 }> {
   const subscription = await subscriptionFor(scope, userId);
   const tier = resolveTier(subscription);
+  const user = await db().get(scope, 'users', userId);
+  const unlimited = Boolean(user && isOperatorUnlimited(user));
+
+  if (unlimited) {
+    return {
+      subscription,
+      tier,
+      limits: OPERATOR_LIMITS,
+      billingOn: billingEnabled(),
+      unlimited: true,
+    };
+  }
+
   return {
     subscription,
     tier,
     limits: planLimitsFor(tier),
     billingOn: billingEnabled(),
+    unlimited: false,
   };
 }
 
 /** Refuse a new project when the plan is full. */
 export async function assertCanCreateProject(scope: TenantScope, userId: Uuid): Promise<void> {
   if (!billingEnabled()) return;
-  const { subscription, limits, tier } = await loadAccess(scope, userId);
+  const { subscription, limits, tier, unlimited } = await loadAccess(scope, userId);
+  if (unlimited) return;
   if (subscription.tier !== 'free' && !isSubscriptionLive(subscription)) {
     throw inactiveSubscriptionError(subscription);
   }
@@ -129,7 +153,8 @@ export async function assertCanUsePosts(
   },
 ): Promise<void> {
   if (!billingEnabled()) return;
-  const { subscription, limits, tier } = await loadAccess(scope, userId);
+  const { subscription, limits, tier, unlimited } = await loadAccess(scope, userId);
+  if (unlimited) return;
   if (subscription.tier !== 'free' && !isSubscriptionLive(subscription)) {
     throw inactiveSubscriptionError(subscription);
   }

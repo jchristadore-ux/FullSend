@@ -10,7 +10,7 @@ import {
 export const runtime = 'nodejs';
 
 export const GET = route(async ({ session }) => {
-  const { subscription, tier, limits, billingOn } = await loadAccess(
+  const { subscription, tier, limits, billingOn, unlimited } = await loadAccess(
     session.scope,
     session.user.id,
   );
@@ -22,9 +22,10 @@ export const GET = route(async ({ session }) => {
     tier,
     status: subscription.status,
     live: isSubscriptionLive(subscription),
+    unlimited,
     plan: {
-      name: PLANS[tier].name,
-      priceUsd: PLANS[tier].priceUsd,
+      name: unlimited ? 'Operator' : PLANS[tier].name,
+      priceUsd: unlimited ? 0 : PLANS[tier].priceUsd,
       limits,
     },
     subscription: {

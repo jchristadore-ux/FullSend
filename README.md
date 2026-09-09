@@ -52,6 +52,7 @@ Plans live in `src/lib/billing/plans.ts`: **Free** / **Send ($29)** / **Full Sen
 
 - **No `STRIPE_SECRET_KEY`** → billing is off; every account gets the full product with no limits.
 - **Stripe configured** → free limits enforce; paid tiers need an `active` or `trialing` subscription. Checkout and the Customer Portal handle cards — FullSend never sees card numbers.
+- **Operators** listed in `FULLSEND_ADMIN_EMAILS` (or `users.is_admin`) get **unlimited** plan limits while still using the app normally — they are not free-plan capped when Live billing is on. Set `FULLSEND_ADMIN_EMAILS=jchristadore@gmail.com` on Vercel for the creator account.
 - Webhooks at `/api/billing/webhook` keep the `subscriptions` row in sync. In-app UI: `/app/billing`.
 
 Owner setup (Dashboard + Vercel env) is documented in the Stripe billing pull request checklist.
