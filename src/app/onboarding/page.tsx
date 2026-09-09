@@ -9,12 +9,27 @@ import { capabilities } from '@/lib/env';
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'What’s your app?' };
 
-export default async function OnboardingPage() {
+/** Same-origin relative path only — used when returning from Add app. */
+function safeReturnPath(next: string | string[] | undefined): string {
+  const raw = Array.isArray(next) ? next[0] : next;
+  if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) {
+    return '/app';
+  }
+  return raw;
+}
+
+export default async function OnboardingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string | string[] }>;
+}) {
   const session = await getSession();
   if (!session) redirect('/login?next=/onboarding');
 
   const projects = await listProjects(session.scope, session.user.id);
   const caps = capabilities();
+  const params = await searchParams;
+  const returnTo = safeReturnPath(params.next);
 
   return (
     <main className="relative min-h-screen bg-void">
@@ -27,7 +42,7 @@ export default async function OnboardingPage() {
             <FullSendLockup width={140} />
           </Link>
           {projects.length > 0 && (
-            <Link href="/app" className="btn-quiet text-sm">
+            <Link href={returnTo} className="btn-quiet text-sm">
               Back to the Send Center →
             </Link>
           )}
