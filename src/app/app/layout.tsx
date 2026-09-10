@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth/session';
 import { listProjects } from '@/lib/db/repo';
+import { activeProjectFrom } from '@/lib/active-project';
 import { FullSendIcon, FullSendLockup } from '@/components/brand/Logo';
 import { AppNav } from '@/components/app/AppNav';
 import { ProjectSwitcher } from '@/components/app/ProjectSwitcher';
@@ -21,6 +22,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const projects = await listProjects(session.scope, session.user.id);
   if (projects.length === 0) redirect('/onboarding');
 
+  /*
+   * The switcher is told what the page below it is actually rendering, rather
+   * than assuming the first project in the list. Those two answers diverged the
+   * moment a second project existed, and the header then named a project the
+   * dashboard was not showing.
+   */
+  const active = await activeProjectFrom(session, projects);
+  const activeId = active?.id;
+
   return (
     <div className="min-h-screen bg-void">
       {/* Desktop: a fixed rail. Mobile: a bottom bar, handled in AppNav. */}
@@ -31,7 +41,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </Link>
         </div>
         <div className="border-b border-edge px-4 py-4">
-          <ProjectSwitcher projects={projects} />
+          <ProjectSwitcher projects={projects} activeId={activeId} />
         </div>
         <AppNav variant="rail" />
         <div className="mt-auto border-t border-edge px-5 py-4">
@@ -57,7 +67,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             FullSend
           </span>
         </Link>
-        <ProjectSwitcher projects={projects} compact />
+        <ProjectSwitcher projects={projects} activeId={activeId} compact />
       </header>
 
       <main className="pb-24 lg:ml-60 lg:pb-0">{children}</main>

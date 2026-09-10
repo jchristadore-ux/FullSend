@@ -1,6 +1,6 @@
 import { LIMITS, projectRoute } from '@/lib/api/handler';
 import { z } from 'zod';
-import { db, enqueueOnce, getAnalysis, getRepository } from '@/lib/db/repo';
+import { db, enqueueOnce, getAnalysis, getRepository, getWebsiteSource } from '@/lib/db/repo';
 import { parseRepoInput } from '@/lib/github/client';
 import { screenshotAvailability } from '@/lib/analysis/analyze';
 import { canonicalWebsiteUrl } from '@/lib/website/url';
@@ -9,10 +9,21 @@ export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 export const GET = projectRoute(async ({ session, project }) => {
+  /*
+   * The website snapshot is only read for a project that has one.
+   *
+   * Reading it unconditionally meant every GitHub project's analysis state went
+   * through a table that only exists after migration 0007 — so on a deployment
+   * whose migration had not been applied yet, this endpoint failed for projects
+   * that predate the feature entirely. `getWebsiteSource` also tolerates the
+   * missing table, which is the second half of the same guarantee.
+   */
   const [repository, analysis, website] = await Promise.all([
     getRepository(session.scope, project.id),
     getAnalysis(session.scope, project.id),
-    db().findOne(session.scope, 'website_sources', { where: { project_id: project.id } }),
+    project.source_type === 'website'
+      ? getWebsiteSource(session.scope, project.id)
+      : Promise.resolve(null),
   ]);
   const personas = analysis ? await db().find(session.scope, 'personas', { where: { project_id: project.id }, orderBy: 'priority', direction: 'asc' }) : [];
   const jobs = await db().find(session.scope, 'jobs', { where: { project_id: project.id }, orderBy: 'created_at', direction: 'desc', limit: 10 });
@@ -20,8 +31,8 @@ export const GET = projectRoute(async ({ session, project }) => {
   const strategyJob = jobs.find((j) => j.type === 'generate_strategy');
   return {
     status: project.status,
-    source_type: project.source_type,
-    website_url: project.website_url,
+    source_type: project.source_type ?? 'github',
+    website_url: project.website_url ?? null,
     repository,
     website,
     analysis,

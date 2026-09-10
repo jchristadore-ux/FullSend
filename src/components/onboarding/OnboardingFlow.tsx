@@ -193,6 +193,7 @@ export function OnboardingFlow({ capabilities }: { capabilities: Capabilities })
       }
 
       setProjectId(json.project.id);
+      rememberActiveProject(json.project.id);
       await poll(json.project.id);
       pollRef.current = setInterval(() => poll(json.project.id), 2500);
     } catch (e) {
@@ -547,6 +548,21 @@ function Capability({
       </span>
     </li>
   );
+}
+
+/**
+ * Mirrors the project this run is about into the switcher's own memory.
+ *
+ * The API already pinned it in the `fs_project` cookie, which is what the
+ * server reads; this keeps the client's remembered choice from disagreeing and
+ * pulling the app back to a different project on the next cold start.
+ */
+function rememberActiveProject(id: string): void {
+  try {
+    localStorage.setItem('fullsend.activeProject', id);
+  } catch {
+    /* private mode — the cookie the API set is the one that counts */
+  }
 }
 
 function guessTimezone(): string {

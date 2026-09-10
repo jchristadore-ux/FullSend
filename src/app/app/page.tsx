@@ -1,13 +1,14 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requireSession } from '@/lib/auth/session';
-import { activeProject } from '@/lib/active-project';
+import { activeProject, otherProjectWithWork } from '@/lib/active-project';
 import { formatCompact, formatSendTime, loadSendCenter, relativeTime } from '@/lib/dashboard';
 import { scoreVerdict } from '@/lib/analytics/send-score';
 import { NextMoveCard } from '@/components/app/NextMoveCard';
 import { PipelineCard } from '@/components/app/PipelineCard';
 import { AttentionBanner } from '@/components/app/AttentionBanner';
 import { MobileSummary } from '@/components/app/MobileSummary';
+import { SwitchProjectPrompt } from '@/components/app/SwitchProjectPrompt';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'The Send Center' };
@@ -19,6 +20,14 @@ export default async function SendCenter() {
 
   const data = await loadSendCenter(session.scope, project);
   const verdict = scoreVerdict(data.sendScore.total);
+
+  /*
+   * An empty Send Center is usually the truth about this project rather than
+   * about the founder's account — the app is pointed at a project with nothing
+   * in it while another one holds the analysis, the content and the calendar.
+   * Say which one, and let it be switched from here.
+   */
+  const elsewhere = data.hasAnalysis ? null : await otherProjectWithWork(session, project.id);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-8 sm:py-10">
@@ -79,7 +88,12 @@ export default async function SendCenter() {
         </div>
       )}
 
-      {!data.hasAnalysis && <SetupPrompt href="/onboarding" label="Analyze your GitHub repo or website" />}
+      {elsewhere && (
+        <SwitchProjectPrompt projectId={elsewhere.id} projectName={elsewhere.name} />
+      )}
+      {!data.hasAnalysis && !elsewhere && (
+        <SetupPrompt href="/onboarding" label="Analyze your GitHub repo or website" />
+      )}
       {data.hasAnalysis && !data.strategyApproved && (
         <SetupPrompt href="/app/strategy" label="Approve your strategy to start sending" />
       )}
