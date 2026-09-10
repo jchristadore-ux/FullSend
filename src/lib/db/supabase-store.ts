@@ -11,6 +11,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { env } from '../env';
 import { forbidden, FullSendError, notFound } from '../errors';
 import { logger } from '../logger';
+import { migrationCreating, migrationRemedy } from './table-origins';
 import type { Job, Uuid } from '../types';
 import {
   type ClaimOptions,
@@ -199,9 +200,8 @@ export class SupabaseStore implements Store {
     if (isSchemaMissing(error)) {
       return new FullSendError('db_schema_missing', `The \`${table}\` table does not exist`, {
         retryable: false,
-        remedy:
-          'Run supabase/migrations/0001_fullsend_init.sql in the Supabase SQL Editor. It creates every table and the rules that keep tenants separate.',
-        meta: { table, code: error.code },
+        remedy: migrationRemedy(table),
+        meta: { table, code: error.code, migration: migrationCreating(table) },
       });
     }
 
