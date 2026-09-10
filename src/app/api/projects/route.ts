@@ -5,6 +5,8 @@ import { db, enqueueOnce, listProjects } from '@/lib/db/repo';
 import { newId, nowIso, slugify } from '@/lib/ids';
 import { parseRepoInput } from '@/lib/github/client';
 import { assertCanCreateProject } from '@/lib/billing/enforce';
+import { FullSendError } from '@/lib/errors';
+import { ACTIVE_PROJECT_COOKIE } from '@/lib/active-project';
 import {
   pipelineState,
   stagePayload,
@@ -47,9 +49,12 @@ export const POST = route(
             projectId: already.id,
           });
         }
-        return NextResponse.json(
-          { project: already, resumed: true, stage: stage ?? 'complete' },
-          { status: 200 },
+        return withActiveProject(
+          NextResponse.json(
+            { project: already, resumed: true, stage: stage ?? 'complete' },
+            { status: 200 },
+          ),
+          already.id,
         );
       }
 
@@ -73,6 +78,34 @@ export const POST = route(
         updated_at: nowIso(),
       });
 
+      /*
+       * A write whose column the database does not have yet is retried without
+       * it — deliberately, so one pending migration cannot stop the whole
+       * product. For a website project that degradation is not survivable: the
+       * row that comes back is a project with no source at all, which can never
+       * be analysed and can never be resumed, and it sits at the top of the
+       * project list where it gets mistaken for the founder's real app.
+       *
+       * Better to refuse the create, say which migration is missing, and leave
+       * nothing behind.
+       */
+      if (project.source_type !== 'website' || !project.website_url) {
+        await db().remove(session.scope, 'projects', project.id).catch(() => {});
+        throw new FullSendError(
+          'migration_pending',
+          'This database cannot store a website as a product source yet',
+          {
+            status: 409,
+            retryable: false,
+            remedy:
+              'Apply migration 0007_website_source.sql — Control Room → Schema → Apply pending ' +
+              'migrations, or run supabase/migrations/0007_website_source.sql in the Supabase SQL ' +
+              'editor. GitHub repositories work in the meantime.',
+            meta: { migration: '0007_website_source.sql' },
+          },
+        );
+      }
+
       await insertDefaultSettings(session.scope, project.id);
 
       const { job } = await enqueueOnce(
@@ -82,7 +115,10 @@ export const POST = route(
         { projectId: project.id },
       );
 
-      return NextResponse.json({ project, jobId: job.id, resumed: false }, { status: 201 });
+      return withActiveProject(
+        NextResponse.json({ project, jobId: job.id, resumed: false }, { status: 201 }),
+        project.id,
+      );
     }
 
     // GitHub path (unchanged behaviour).
@@ -96,9 +132,12 @@ export const POST = route(
           projectId: already.id,
         });
       }
-      return NextResponse.json(
-        { project: already, resumed: true, stage: stage ?? 'complete' },
-        { status: 200 },
+      return withActiveProject(
+        NextResponse.json(
+          { project: already, resumed: true, stage: stage ?? 'complete' },
+          { status: 200 },
+        ),
+        already.id,
       );
     }
 
@@ -131,7 +170,10 @@ export const POST = route(
       { projectId: project.id },
     );
 
-    return NextResponse.json({ project, jobId: job.id, resumed: false }, { status: 201 });
+    return withActiveProject(
+      NextResponse.json({ project, jobId: job.id, resumed: false }, { status: 201 }),
+      project.id,
+    );
   },
   {
     schema: createProjectInput,
@@ -139,6 +181,24 @@ export const POST = route(
     rateLimitKey: 'create-project',
   },
 );
+
+/**
+ * Pins the project this call was about as the active one.
+ *
+ * Which project the app shows was an implicit default — the newest row — until
+ * something wrote the cookie. Adding a second app therefore silently moved the
+ * whole app onto the new, empty project. Starting or resuming a project is an
+ * explicit choice to look at it, so it is recorded as one, and switching back
+ * is one press of the switcher.
+ */
+function withActiveProject(res: NextResponse, projectId: string): NextResponse {
+  res.cookies.set(ACTIVE_PROJECT_COOKIE, projectId, {
+    path: '/',
+    maxAge: 60 * 60 * 24 * 365,
+    sameSite: 'lax',
+  });
+  return res;
+}
 
 async function insertDefaultSettings(scope: TenantScope, projectId: string) {
   await db().insert(scope, 'settings', {

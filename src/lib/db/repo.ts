@@ -1,3 +1,4 @@
+import { FullSendError } from '../errors';
 import { newId, nowIso } from '../ids';
 import { queueStamp } from '../jobs/clock';
 import { isStalled } from '../jobs/job-failure';
@@ -10,7 +11,23 @@ export async function listProjects(scope: TenantScope, userId?: Uuid): Promise<P
 export async function getProject(scope: TenantScope, id: Uuid): Promise<Project | null> { return db().get(scope, 'projects', id); }
 export async function updateProject(scope: TenantScope, id: Uuid, patch: Partial<Project>): Promise<Project> { return db().update(scope, 'projects', id, { ...patch, updated_at: nowIso() }); }
 export async function getRepository(scope: TenantScope, projectId: Uuid): Promise<Repository | null> { return db().findOne(scope, 'repositories', { where: { project_id: projectId } }); }
-export async function getWebsiteSource(scope: TenantScope, projectId: Uuid): Promise<WebsiteSource | null> { return db().findOne(scope, 'website_sources', { where: { project_id: projectId } }); }
+/**
+ * The website snapshot for a project, or null.
+ *
+ * Tolerates the table not being there. `website_sources` arrives in migration
+ * 0007, and migrations are applied by an admin *after* the code deploys — that
+ * ordering is deliberate. A hard failure here took the analysis endpoint down
+ * for every existing GitHub project, which is a founder's analysis, content and
+ * calendar disappearing over a table they do not use.
+ */
+export async function getWebsiteSource(scope: TenantScope, projectId: Uuid): Promise<WebsiteSource | null> {
+  try {
+    return await db().findOne(scope, 'website_sources', { where: { project_id: projectId } });
+  } catch (e) {
+    if (e instanceof FullSendError && e.code === 'db_schema_missing') return null;
+    throw e;
+  }
+}
 export async function getAnalysis(scope: TenantScope, projectId: Uuid): Promise<ProductAnalysis | null> { return db().findOne(scope, 'product_analysis', { where: { project_id: projectId }, orderBy: 'created_at', direction: 'desc' }); }
 export async function listPersonas(scope: TenantScope, projectId: Uuid): Promise<Persona[]> { return db().find(scope, 'personas', { where: { project_id: projectId }, orderBy: 'priority', direction: 'asc' }); }
 export async function getStrategy(scope: TenantScope, projectId: Uuid): Promise<MarketingStrategy | null> { return db().findOne(scope, 'marketing_strategies', { where: { project_id: projectId }, orderBy: 'version', direction: 'desc' }); }
