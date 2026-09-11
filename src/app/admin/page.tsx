@@ -291,6 +291,22 @@ export default async function ControlRoom() {
         <section className="panel mt-6 overflow-hidden">
           <div className="border-b border-edge p-5">
             <span className="label">Projects</span>
+            {/*
+              * Which database these rows came from.
+              *
+              * "My projects are gone" and "this deployment is pointed at a
+              * different Supabase project" look identical from every screen in
+              * the app, and only one of them is a bug in the code. The project
+              * ref is the public half of NEXT_PUBLIC_SUPABASE_URL — it already
+              * ships in the browser bundle — so naming it here costs nothing
+              * and settles the question in one glance.
+              */}
+            <p className="mt-1 font-mono text-[10px] text-dimmer">
+              {projects.length} project{projects.length === 1 ? '' : 's'} in{' '}
+              {supabaseRef(env.supabase.url) ?? 'an unidentified database'} · {users.length} user
+              {users.length === 1 ? '' : 's'} · {content.length} content item
+              {content.length === 1 ? '' : 's'}
+            </p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-left text-sm">
@@ -349,6 +365,21 @@ export default async function ControlRoom() {
 }
 
 /** Rough monthly infrastructure cost for the documented stack. */
+/**
+ * The Supabase project ref from its URL — `abcd1234` of
+ * `https://abcd1234.supabase.co`. Null when the URL is unset or unrecognisable.
+ */
+function supabaseRef(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    const host = new URL(url).hostname;
+    const ref = host.split('.')[0];
+    return ref && ref !== 'localhost' ? ref : host;
+  } catch {
+    return null;
+  }
+}
+
 function estimateInfra(projects: number, posts: number): string {
   // Vercel Hobby/Pro + Supabase free/pro, stepping up with real usage.
   const vercel = projects > 3 ? 20 : 0;

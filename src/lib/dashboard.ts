@@ -165,7 +165,7 @@ export async function loadSendCenter(
 
   return {
     project,
-    autopilotOn: project.autopilot_mode !== 'manual' && project.status !== 'paused',
+    autopilotOn: autopilotRunning(project),
     accounts,
     attention,
     metrics: {
@@ -191,6 +191,22 @@ export async function loadSendCenter(
     aiCostUsd: spend.total,
     deadJobs: queue.dead,
   };
+}
+
+/**
+ * Whether this project's marketing is actually running.
+ *
+ * This asked only whether autopilot was switched on, so a project whose
+ * analysis had died still reported AUTOPILOT ACTIVE under the headline "Your
+ * marketing is running." — on a project with no analysis, no content and an
+ * empty calendar. The mode being `full_send` is a setting, not a state: a run
+ * that failed, or one that has not started, is marketing that is not running,
+ * and saying so is the difference between a founder finding the problem and
+ * trusting the page.
+ */
+function autopilotRunning(project: Project): boolean {
+  if (project.autopilot_mode === 'manual') return false;
+  return project.status !== 'paused' && project.status !== 'failed' && project.status !== 'created';
 }
 
 async function previewFor(

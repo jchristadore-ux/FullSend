@@ -11,6 +11,13 @@ import { createProject, setupContext, teardown, type TestContext } from './helpe
 import { MemoryStore, setStore, type Store, type TableName } from '@/lib/db';
 import { FullSendError } from '@/lib/errors';
 import { getWebsiteSource } from '@/lib/db/repo';
+import {
+  INITIAL_MIGRATION,
+  LATER_TABLES,
+  migrationCreating,
+  migrationRemedy,
+} from '@/lib/db/table-origins';
+import { MIGRATIONS } from '@/lib/db/migration-sql.generated';
 
 /** A store that answers "that table isn't there" for one table. */
 function storeWithout(inner: MemoryStore, missing: TableName): Store {
@@ -68,5 +75,58 @@ describe('reading a table migration 0007 has not created yet', () => {
     setStore(broken);
 
     await expect(getWebsiteSource(ctx.scope, project.id)).rejects.toThrow('connection reset');
+  });
+});
+
+describe('the remedy a missing table gives', () => {
+  it('names the migration that actually creates that table', () => {
+    expect(migrationCreating('website_sources')).toBe('0007_website_source.sql');
+    const remedy = migrationRemedy('website_sources');
+    expect(remedy).toContain('0007_website_source.sql');
+    expect(remedy).toContain('Control Room');
+    // The old answer sent everyone to 0001, which does not create this table.
+    expect(remedy).not.toContain('0001_fullsend_init.sql');
+  });
+
+  it('still points at the initial schema for a table 0001 creates', () => {
+    expect(migrationCreating('projects')).toBe('0001_fullsend_init.sql');
+    expect(migrationRemedy('projects')).toContain('0001_fullsend_init.sql');
+  });
+
+  it('carries that remedy on the error a caller receives', () => {
+    const err = new FullSendError('db_schema_missing', 'The `website_sources` table does not exist', {
+      retryable: false,
+      remedy: migrationRemedy('website_sources'),
+      meta: { migration: migrationCreating('website_sources') },
+    });
+    expect(err.toJSON().remedy).toContain('0007_website_source.sql');
+    expect(err.retryable).toBe(false);
+  });
+});
+
+/**
+ * Keeps `table-origins` honest against the migrations themselves.
+ *
+ * The map is plain data so the driver does not carry the migration SQL into
+ * every serverless bundle. The cost of that is drift, and this is what pays it:
+ * a table introduced by a later migration with no entry fails here.
+ */
+describe('every table names the migration that creates it', () => {
+  it('agrees with the migration SQL', () => {
+    const created = new Map<string, string>();
+    const pattern = /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?"?([a-z0-9_]+)"?/gi;
+    for (const migration of MIGRATIONS) {
+      for (const match of migration.sql.matchAll(pattern)) {
+        if (!created.has(match[1])) created.set(match[1], migration.name);
+      }
+    }
+    expect(created.get('projects')).toBe(INITIAL_MIGRATION);
+
+    for (const [table, migration] of created) {
+      expect(migrationCreating(table), `${table} is created by ${migration}`).toBe(migration);
+    }
+    for (const table of Object.keys(LATER_TABLES)) {
+      expect(created.has(table), `${table} is not created by any migration`).toBe(true);
+    }
   });
 });
