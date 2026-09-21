@@ -19,8 +19,8 @@ Owner-only Meta Business Verification clicks live in the repo-root [`OPERATOR_AC
 
 ## Runtime checks (no secrets)
 
-- `GET /api/health/meta` — public Meta readiness (presence flags, redirect URI, callback URLs, scopes, media notes)
-- `GET /api/health` with cron secret — full diagnostics, including the same `meta` object
+- `GET /api/health/meta` — public Meta readiness (presence flags, redirect URI, callback URLs, scopes, media notes). Never returns App ID, App Secret, or other secrets.
+- `GET /api/health` — existing public liveness / authorized diagnostics (unchanged on this branch).
 
 ## Source of truth for scopes
 
