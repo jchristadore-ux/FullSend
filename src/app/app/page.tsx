@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requireSession } from '@/lib/auth/session';
 import { activeProject, otherProjectWithWork } from '@/lib/active-project';
-import { formatCompact, formatSendTime, loadSendCenter, relativeTime } from '@/lib/dashboard';
+import { formatCompact, formatSendTime, loadSendCenter, relativeTime, publishDrift } from '@/lib/dashboard';
 import { scoreVerdict } from '@/lib/analytics/send-score';
 import { NextMoveCard } from '@/components/app/NextMoveCard';
 import { PipelineCard } from '@/components/app/PipelineCard';
@@ -192,6 +192,16 @@ export default async function SendCenter() {
                       <p className="truncate text-sm font-semibold text-mist">{post.hook}</p>
                       <p className="font-mono text-[10px] text-dimmer">
                         {post.platform} · {relativeTime(post.publishedAt)}
+                        {(() => {
+                          const drift = publishDrift(post.scheduledFor, post.publishedAt);
+                          if (!drift || drift.label === 'on time') return null;
+                          return (
+                            <span className={drift.lateMs > 5 * 60_000 ? ' text-warn' : ''}>
+                              {' '}
+                              · {drift.label}
+                            </span>
+                          );
+                        })()}
                       </p>
                     </div>
                     <div className="shrink-0 text-right">
