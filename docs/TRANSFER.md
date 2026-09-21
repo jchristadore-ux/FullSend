@@ -39,7 +39,7 @@ Group vars the way `.env.example` does. Values live only in Vercel (and local `.
 | **AI** | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `FULLSEND_AI_MONTHLY_BUDGET_USD` |
 | **GitHub** | `GITHUB_TOKEN`, optional OAuth client id/secret |
 | **Instagram / Meta** | `META_APP_ID`, `META_APP_SECRET` |
-| **TikTok** (optional) | `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_CLIENT_AUDITED` |
+| **TikTok** (optional / off by default) | `FULLSEND_TIKTOK_ENABLED`, `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_CLIENT_AUDITED` |
 | **Cron** | `CRON_SECRET` (must match Actions secret `FULLSEND_CRON_SECRET`) |
 | **Billing** | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `STRIPE_PRICE_*` |
 | **Video** (optional) | `FULLSEND_VIDEO_PROVIDER`, `FULLSEND_VIDEO_API_KEY` |
@@ -66,7 +66,9 @@ After switching Stripe from **test** to **live**, stored `stripe_customer_id` va
 
 ### TikTok is not production
 
-Instagram is the only active production social destination. TikTok posting stays `SELF_ONLY` until `TIKTOK_CLIENT_AUDITED=true` after TikTok’s content-posting audit. Do not market TikTok as live unless that audit and env flag are in place.
+Instagram is the only active production social destination. TikTok is **off by default** (`FULLSEND_TIKTOK_ENABLED` unset/false): connect and publish refuse, and the Accounts UI shows “Not available.” Even with credentials, do not market TikTok as live.
+
+If you deliberately enable it later: set `FULLSEND_TIKTOK_ENABLED=true`, complete Login Kit + Content Posting API setup, then `TIKTOK_CLIENT_AUDITED=true` only after TikTok’s content-posting audit (until then posts stay `SELF_ONLY`). See `OPERATOR_ACTIONS.md`.
 
 ### Actions heartbeat cron
 
