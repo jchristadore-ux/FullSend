@@ -13,6 +13,7 @@ import { DeterministicProvider } from './deterministic-provider';
 import { AnthropicProvider } from './anthropic-provider';
 import { OpenAiProvider } from './openai-provider';
 import type { AiMessage, AiProvider, CompletionRequest, CompletionResponse, ModelTier } from './types';
+import { assertTenantAiAllowance } from './tenant-limit';
 
 const log = logger('ai');
 let cached: AiProvider | null = null;
@@ -97,6 +98,10 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
   const provider = getProvider();
   const tier = opts.tier ?? tierFor(opts.task);
   const model = provider.modelFor(tier);
+  assertTenantAiAllowance({
+    userId: opts.attribution?.userId ?? null,
+    projectId: opts.attribution?.projectId ?? null,
+  });
   await assertWithinBudget(opts.attribution?.projectId ?? null);
 
   // Keep the complete schema for local repair/validation. Provider dialects are

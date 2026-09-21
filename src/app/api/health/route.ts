@@ -17,6 +17,8 @@ import { env, capabilities } from '@/lib/env';
 import { isSchemaMissing } from '@/lib/db/supabase-store';
 import { cronSecretValid, queueHealth, type QueueHealth } from '@/lib/jobs/runner';
 import { fontHealth } from '@/lib/creative/fonts';
+import { computeOpsAlerts, type OpsAlert } from '@/lib/ops/alerts';
+import { recentErrors, sentryConfigured } from '@/lib/ops/error-tracking';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -428,6 +430,22 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   } catch {
     queue = null;
   }
+
+  let alerts: OpsAlert[] = [];
+  let staleLeaseCount = 0;
+  try {
+    const ops = await computeOpsAlerts();
+    alerts = ops.alerts;
+    staleLeaseCount = ops.staleLeases.length;
+    for (const a of alerts) {
+      if (a.severity === 'critical' || a.severity === 'warn') {
+        problems.push(a.message);
+      }
+    }
+  } catch {
+    alerts = [];
+  }
+
   if (queue && queue.oldestQueued && queue.oldestQueued.dueInSeconds <= 0) {
     const waited = queue.oldestQueued.waitingSeconds;
     // Two lock timeouts is well past any healthy claim delay, so at that point
@@ -481,6 +499,23 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
        * head of it. Counts and timings only — see `QueueHealth`.
        */
       queue,
+      /**
+       * Operator alerts: repeated failures, stale leases, dead-letter backlog.
+       * Counts/types only — no payloads.
+       */
+      alerts,
+      staleLeaseCount,
+      errorTracking: {
+        sentry: sentryConfigured(),
+        /** Recent in-process captures (message already redacted). */
+        recent: recentErrors(10).map((e) => ({
+          ts: e.ts,
+          scope: e.scope,
+          level: e.level,
+          message: e.message,
+          sentry: e.sentry,
+        })),
+      },
     },
     { headers: { 'Cache-Control': 'no-store' } },
   );

@@ -6,6 +6,7 @@ import { FullSendError, isFullSendError } from '../errors';
 import { nowIso } from '../ids';
 import { queueStamp } from './clock';
 import { reportJobFailure } from '../ops/report-failure';
+import { captureError } from '../ops/error-tracking';
 import { logger } from '../logger';
 import { systemAnalyzeProduct, systemAnalyzeWebsiteProduct } from '../analysis/analyze';
 import { buildStrategy, ensureBrandProfile } from '../strategy/build';
@@ -189,6 +190,7 @@ export async function runJob(job: Job): Promise<{ status: 'succeeded' | 'failed'
       // Reporting is best-effort and never throws — the durable record above
       // is already written, so a lost issue loses nothing.
       await reportJobFailure({ job, message, remedy });
+      await captureError(message, { scope: `job:${job.type}`, meta: { jobId: job.id, projectId: job.project_id, attempts: job.attempts }, localOnly: false });
       return { status: 'dead' }; } // A failure that already knows when it may be tried again — a publish holding
     // its own backoff, a platform naming a retry-after — decides its own slot;
     // the queue's exponential backoff is the floor, never an override.

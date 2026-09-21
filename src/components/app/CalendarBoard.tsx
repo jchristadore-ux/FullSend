@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { STATUS_STYLE } from './status';
+import { STATUS_LABEL, STATUS_STYLE, publishDisplayStatus } from './status';
 import {
   describeGenerationOutcome,
   type GenerationJob,
@@ -171,7 +171,12 @@ export function CalendarBoard({
 
               <ul className="space-y-px bg-edge">
                 {items.map((item) => {
-                  const style = STATUS_STYLE[item.status] ?? STATUS_STYLE.draft;
+                  const displayStatus = publishDisplayStatus({
+                    status: item.status,
+                    lastError: item.lastError,
+                    attempts: item.attempts,
+                  });
+                  const style = STATUS_STYLE[displayStatus] ?? STATUS_STYLE.draft;
                   return (
                     <li key={item.id} className="flex items-center gap-3 bg-charcoal p-3">
                       {item.preview ? (
@@ -214,7 +219,7 @@ export function CalendarBoard({
                       <span
                         className={`shrink-0 border px-2 py-1 font-mono text-[10px] uppercase tracking-wider ${style}`}
                       >
-                        {item.status.replace('_', ' ')}
+                        {STATUS_LABEL[displayStatus] ?? displayStatus.replace('_', ' ')}
                       </span>
 
                       {item.status !== 'published' && (

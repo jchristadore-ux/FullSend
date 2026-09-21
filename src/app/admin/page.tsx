@@ -11,6 +11,9 @@ import { capabilities, env } from '@/lib/env';
 import { formatCompact, relativeTime } from '@/lib/dashboard';
 import { FullSendLockup } from '@/components/brand/Logo';
 import { MigrationsCard } from '@/components/app/MigrationsCard';
+import { computeOpsAlerts } from '@/lib/ops/alerts';
+import { recentErrors, sentryConfigured } from '@/lib/ops/error-tracking';
+import { redact } from '@/lib/ops/redact';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'FullSend Control Room' };
@@ -42,6 +45,7 @@ export default async function ControlRoom() {
     content,
     spend,
     subscriptions,
+    ops,
   ] = await Promise.all([
     db().find(scope, 'users', {}),
     db().find(scope, 'projects', { orderBy: 'created_at', direction: 'desc' }),
@@ -58,7 +62,10 @@ export default async function ControlRoom() {
     db().find(scope, 'content_items', {}),
     aiSpend(scope, {}),
     db().find(scope, 'subscriptions', {}),
+    computeOpsAlerts(),
   ]);
+  const captured = recentErrors(15);
+  const sentryOn = sentryConfigured();
 
   const caps = capabilities();
   const provider = getProvider();
@@ -162,6 +169,63 @@ export default async function ControlRoom() {
             )}
           </section>
         </div>
+
+
+        {/* Operator alerts — repeated failures, stale leases, dead letters. */}
+        {(ops.alerts.length > 0 || ops.staleLeases.length > 0) && (
+          <section className="panel mt-6 border-fail/40 p-5">
+            <span className="label text-fail">Alerts</span>
+            <ul className="mt-3 space-y-2">
+              {ops.alerts.map((a) => (
+                <li key={a.code} className="border-l-2 border-fail pl-3">
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-fail">
+                    {a.code.replace(/_/g, ' ')} · {a.severity} · count {a.count}
+                  </p>
+                  <p className="text-sm text-mist">{a.message}</p>
+                </li>
+              ))}
+              {ops.staleLeases.slice(0, 5).map((s) => (
+                <li key={s.id} className="font-mono text-[11px] text-warn">
+                  Stale lease · {s.type} · {s.ageSeconds}s past claim
+                  {s.projectId ? ` · project ${s.projectId.slice(0, 8)}…` : ''}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 font-mono text-[10px] text-dimmer">
+              Error tracking: {sentryOn ? 'Sentry DSN set (upgraded)' : 'local ring buffer (set SENTRY_DSN to upgrade)'}
+              {captured.length > 0 && ` · ${captured.length} recent capture(s) in-process`}
+            </p>
+          </section>
+        )}
+
+        {/* Dead-letter queue — jobs that exhausted retries. */}
+        <section className="panel mt-6 p-5">
+          <span className="label">Dead letter</span>
+          <p className="mt-1 font-mono text-[10px] text-dimmer">
+            Jobs that exhausted retries. Nothing here is silently dropped — each
+            also lands in Unresolved failures{sentryOn ? ' and Sentry' : ''}.
+          </p>
+          {ops.deadLetters.length === 0 ? (
+            <p className="mt-3 text-sm text-live">Dead-letter queue empty.</p>
+          ) : (
+            <ul className="mt-3 max-h-80 space-y-2.5 overflow-y-auto">
+              {ops.deadLetters.map((d) => (
+                <li key={d.id} className="border-l-2 border-fail pl-3">
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-fail">
+                    {d.type} · {d.attempts}/{d.maxAttempts} attempts · {relativeTime(d.updatedAt)}
+                  </p>
+                  <p className="text-sm text-mist">
+                    {d.lastError ? redact(d.lastError, 280) : 'No error text recorded'}
+                  </p>
+                  <p className="font-mono text-[10px] text-dimmer">
+                    job {d.id.slice(0, 8)}…
+                    {d.projectId ? ` · project ${d.projectId.slice(0, 8)}…` : ''}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
         <MigrationsCard />
 
