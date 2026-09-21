@@ -28,7 +28,7 @@ function stagesFor(platformsLabel: string): Stage[] {
 }
 
 export function HeroFlow({
-  platformsLabel = 'Instagram (TikTok when connected)',
+  platformsLabel = 'Instagram',
 }: {
   platformsLabel?: string;
 }) {

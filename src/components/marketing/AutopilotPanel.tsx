@@ -18,7 +18,7 @@ function rowsFor(platformsLabel: string) {
 }
 
 export function AutopilotPanel({
-  platformsLabel = 'Instagram (TikTok when connected)',
+  platformsLabel = 'Instagram',
 }: {
   platformsLabel?: string;
 }) {
