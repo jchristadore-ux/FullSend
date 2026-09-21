@@ -120,16 +120,18 @@ Nothing in the schedule can fix that, so the run compensates for it: the queue j
 
 ### Driving the queue from outside GitHub
 
-For a genuinely punctual worker, point any scheduler at the queue endpoint:
+For a genuinely punctual worker, point any scheduler at the queue endpoint every five minutes:
 
 ```
-POST https://<your-app>/api/cron/queue
+POST {appUrl}/api/cron/queue
 Authorization: Bearer <CRON_SECRET>
 ```
 
-Every five minutes is a sensible interval; each call is a bounded worker pass and returns as soon as it has done its allowance. Free services that do this include cron-job.org, Cronitor and UptimeRobot. On Vercel Pro you can use native crons in `vercel.json` instead — disable the Actions workflow if you do, so the jobs are not driven twice.
+`appUrl` is the origin reported by `GET /api/health` — use that exact host, not a guess. Free services that do this include cron-job.org, Cronitor and UptimeRobot. On Vercel Pro you can use native crons in `vercel.json` instead.
 
-**Whatever drives it, treat anything other than HTTP 200 as a failure — a redirect especially.** Vercel answers `308` for any origin that is not the canonical one: `http://` rather than `https`, a www/apex mismatch, a deployment alias pointing at the production domain. Most HTTP clients neither follow a redirect by default nor call it an error, so a wrong URL returns a success with a body of `Redirecting...` and the queue silently never runs. This is not hypothetical: it stalled this deployment for days, wearing the exact costume of a healthy system. Point the scheduler at the origin the deployment reports as `appUrl` on `/api/health`, and alert on the status code rather than on the request failing.
+**Exact click-path setup, how to disable one driver so jobs are not double-driven, and the 308 trap:** see [`docs/SCHEDULER.md`](docs/SCHEDULER.md) and the operator checklist in [`OPERATOR_ACTIONS.md`](OPERATOR_ACTIONS.md).
+
+**Whatever drives it, treat anything other than HTTP 200 as a failure — a redirect especially.** Vercel answers `308` for any origin that is not the canonical one. Most HTTP clients wave a 3xx through, so a wrong URL returns success with a body of `Redirecting...` and the queue silently never runs. Keep Actions as an optional fallback; disable the workflow (or the pinger) when the other is primary.
 
 ## Security
 
