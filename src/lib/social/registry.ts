@@ -59,8 +59,8 @@ export function getAdapter(platform: Platform): PlatformAdapter {
         {
           status: 400,
           remedy:
-            'Instagram and TikTok are live today. The adapter interface is ready for the others — ' +
-            'they are not offered in the UI until they actually work.',
+            'Instagram is the production destination today. TikTok is gated behind ' +
+            'FULLSEND_TIKTOK_ENABLED. Other platforms share the adapter interface but are not built yet.',
         },
       );
   }
@@ -83,6 +83,8 @@ export function platformStatus(): PlatformStatus[] {
   const ig = getAdapter('instagram');
   const tt = getAdapter('tiktok');
 
+  const tiktokEnabled = env.tiktok.enabled || mockRegistry !== null;
+
   return [
     {
       platform: 'instagram' as Platform,
@@ -94,12 +96,20 @@ export function platformStatus(): PlatformStatus[] {
     },
     {
       platform: 'tiktok' as Platform,
-      live: true,
-      configured: tt.configured,
+      // Off by default — sale honesty / production destination is Instagram only.
+      live: tiktokEnabled,
+      configured: tiktokEnabled && tt.configured,
       // Without the audit, posts are SELF_ONLY — that is not fully operational.
-      fullyOperational: tt.configured && (mockRegistry !== null || env.tiktok.audited),
-      restrictions: tt.capabilities.restrictions,
-      setupHref: '/app/accounts/tiktok/setup',
+      fullyOperational:
+        tiktokEnabled && tt.configured && (mockRegistry !== null || env.tiktok.audited),
+      restrictions: tiktokEnabled
+        ? tt.capabilities.restrictions
+        : [
+            'Not available — TikTok is roadmap / not enabled on this deployment',
+            'Not audited for public posting; do not market as a live destination',
+            'Operators: set FULLSEND_TIKTOK_ENABLED=true only after deliberate enablement (OPERATOR_ACTIONS.md)',
+          ],
+      setupHref: tiktokEnabled ? '/app/accounts/tiktok/setup' : null,
     },
     ...(['youtube_shorts', 'linkedin', 'facebook', 'x', 'pinterest'] as Platform[]).map((p) => ({
       platform: p,
@@ -112,8 +122,31 @@ export function platformStatus(): PlatformStatus[] {
   ];
 }
 
+/**
+ * Platforms this deployment treats as live for connect/publish/autopilot.
+ * Instagram always; TikTok only when FULLSEND_TIKTOK_ENABLED (or test mocks).
+ */
 export function livePlatforms(): Platform[] {
-  return LIVE_PLATFORMS;
+  if (env.tiktok.enabled || mockRegistry !== null) {
+    return ['instagram', 'tiktok'];
+  }
+  return [...LIVE_PLATFORMS];
+}
+
+/** Refuse TikTok OAuth/publish when the master gate is off. */
+export function assertPlatformLive(platform: Platform): void {
+  if (platform === 'tiktok' && !(env.tiktok.enabled || mockRegistry !== null)) {
+    throw new FullSendError(
+      'platform_unavailable',
+      'TikTok is not available on this deployment',
+      {
+        status: 403,
+        remedy:
+          'Instagram is the only production destination. TikTok stays off unless an operator ' +
+          'sets FULLSEND_TIKTOK_ENABLED=true after audit readiness — see OPERATOR_ACTIONS.md.',
+      },
+    );
+  }
 }
 
 /** Platforms this deployment can publish to right now. */

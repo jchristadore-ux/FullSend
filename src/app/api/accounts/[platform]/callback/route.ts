@@ -8,7 +8,7 @@ import { db, getProject, notify } from '@/lib/db/repo';
 import { logger } from '@/lib/logger';
 import { completeConnection } from '@/lib/social/connections';
 import { resumeAfterReconnect } from '@/lib/publish/publish';
-import { getAdapter } from '@/lib/social/registry';
+import { assertPlatformLive, getAdapter } from '@/lib/social/registry';
 import { classifyMetaAuthFailure } from '@/lib/social/meta-app';
 import { PLATFORMS, type Platform } from '@/lib/types';
 import { platformLabel } from '@/lib/platform-labels';
@@ -34,6 +34,7 @@ export async function GET(
     const session = await requireSession();
     if (!PLATFORMS.includes(raw as Platform)) throw badRequest(`Unknown platform: ${raw}`);
     const platform = raw as Platform;
+    assertPlatformLive(platform);
 
     const params = req.nextUrl.searchParams;
 

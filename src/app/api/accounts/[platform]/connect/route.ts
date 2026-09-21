@@ -6,7 +6,7 @@ import { encryptSecret, signState } from '@/lib/crypto';
 import { env } from '@/lib/env';
 import { badRequest, FullSendError } from '@/lib/errors';
 import { getProject } from '@/lib/db/repo';
-import { getAdapter } from '@/lib/social/registry';
+import { assertPlatformLive, getAdapter } from '@/lib/social/registry';
 import { PLATFORMS, type Platform } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -27,6 +27,7 @@ export async function GET(
 
     if (!PLATFORMS.includes(raw as Platform)) throw badRequest(`Unknown platform: ${raw}`);
     const platform = raw as Platform;
+    assertPlatformLive(platform);
 
     check(`oauth:${session.user.id}`, LIMITS.oauthStart);
 

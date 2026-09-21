@@ -75,6 +75,7 @@ export class TikTokAdapter implements PlatformAdapter {
   /* ── OAuth (PKCE required) ────────────────────────────────────────────── */
 
   authorizeUrl(state: string, redirectUri: string): OAuthStartResult {
+    this.assertEnabled();
     this.assertConfigured();
     const { verifier, challenge } = createPkcePair();
     const p = new URLSearchParams({
@@ -94,6 +95,7 @@ export class TikTokAdapter implements PlatformAdapter {
     redirectUri: string,
     codeVerifier?: string,
   ): Promise<TokenSet> {
+    this.assertEnabled();
     this.assertConfigured();
     if (!codeVerifier) {
       throw new FullSendError('oauth_state_lost', 'The TikTok sign-in session was lost', {
@@ -112,6 +114,7 @@ export class TikTokAdapter implements PlatformAdapter {
   }
 
   async refresh(tokens: TokenSet): Promise<TokenSet> {
+    this.assertEnabled();
     if (!tokens.refreshToken) {
       throw connectionError(
         'tiktok',
@@ -148,6 +151,7 @@ export class TikTokAdapter implements PlatformAdapter {
   /* ── Account ──────────────────────────────────────────────────────────── */
 
   async getAccount(tokens: TokenSet): Promise<AccountInfo> {
+    this.assertEnabled();
     const fields = 'open_id,union_id,display_name,avatar_url,follower_count,username';
     const r = await this.get<any>(
       `${env.tiktok.apiHost}/v2/user/info/?fields=${fields}`,
@@ -193,6 +197,7 @@ export class TikTokAdapter implements PlatformAdapter {
     account: AccountInfo,
     input: PublishInput,
   ): Promise<PublishResult> {
+    this.assertEnabled();
     const videoUrl = input.videoUrl ?? input.mediaUrls[0];
     if (!videoUrl) {
       throw new FullSendError('media_missing', 'TikTok needs a video file to publish', {
@@ -350,6 +355,25 @@ export class TikTokAdapter implements PlatformAdapter {
   }
 
   /* ── Plumbing ─────────────────────────────────────────────────────────── */
+
+  /**
+   * Master gate: credentials alone must not start OAuth or publish. Matches
+   * assertPlatformLive / FULLSEND_TIKTOK_ENABLED — Instagram-only by default.
+   */
+  private assertEnabled(): void {
+    if (!env.tiktok.enabled) {
+      throw new FullSendError(
+        'platform_unavailable',
+        'TikTok is not available on this deployment',
+        {
+          status: 403,
+          remedy:
+            'Instagram is the only production destination. TikTok stays off unless an operator ' +
+            'sets FULLSEND_TIKTOK_ENABLED=true after audit readiness — see OPERATOR_ACTIONS.md.',
+        },
+      );
+    }
+  }
 
   private assertConfigured(): void {
     if (!this.configured) {

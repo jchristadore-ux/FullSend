@@ -56,7 +56,8 @@ export default async function AccountsPage({
 
   const params = await searchParams;
   const accounts = await listSocialAccounts(session.scope, project.id);
-  const status = platformStatus().filter((s) => s.live);
+  // Live platforms plus TikTok even when gated, so the UI can say "not available".
+  const status = platformStatus().filter((s) => s.live || s.platform === 'tiktok');
 
   const mediaPrefix = storageAvailable()
     ? `${env.supabase.url}/storage/v1/object/public/${env.supabase.storageBucket}/`

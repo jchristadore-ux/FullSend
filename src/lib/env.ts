@@ -119,12 +119,29 @@ export const env = {
   },
 
   tiktok: {
-    clientKey: opt('TIKTOK_CLIENT_KEY'),
-    clientSecret: opt('TIKTOK_CLIENT_SECRET'),
+    get clientKey() {
+      return opt('TIKTOK_CLIENT_KEY');
+    },
+    get clientSecret() {
+      return opt('TIKTOK_CLIENT_SECRET');
+    },
     apiHost: opt('TIKTOK_API_HOST') ?? 'https://open.tiktokapis.com',
     authHost: opt('TIKTOK_AUTH_HOST') ?? 'https://www.tiktok.com',
+    /**
+     * Master gate for TikTok connect/publish. Off by default: Instagram is the
+     * only production destination. Set FULLSEND_TIKTOK_ENABLED=true only after
+     * deliberate enablement (see OPERATOR_ACTIONS.md) — credentials alone are
+     * not enough.
+     *
+     * Getter so tests and late-injected serverless env see the live value.
+     */
+    get enabled() {
+      return opt('FULLSEND_TIKTOK_ENABLED') === 'true';
+    },
     /** Set true once TikTok has audited the client; gates PUBLIC_TO_EVERYONE. */
-    audited: opt('TIKTOK_CLIENT_AUDITED') === 'true',
+    get audited() {
+      return opt('TIKTOK_CLIENT_AUDITED') === 'true';
+    },
   },
 
   stripe: {
@@ -216,8 +233,11 @@ export function capabilities() {
     githubOAuth: Boolean(env.github.clientId && env.github.clientSecret),
     ai: env.ai.provider !== 'mock',
     instagram: Boolean(env.meta.appId && env.meta.appSecret),
-    tiktok: Boolean(env.tiktok.clientKey && env.tiktok.clientSecret),
-    tiktokPublicPosting: env.tiktok.audited,
+    /** Master gate — false unless FULLSEND_TIKTOK_ENABLED=true. */
+    tiktokEnabled: env.tiktok.enabled,
+    /** Credentials present AND the master gate is on. */
+    tiktok: env.tiktok.enabled && Boolean(env.tiktok.clientKey && env.tiktok.clientSecret),
+    tiktokPublicPosting: env.tiktok.enabled && env.tiktok.audited,
     storage: Boolean(env.supabase.url && env.supabase.serviceRoleKey),
     videoRender: env.video.provider !== 'none' && Boolean(env.video.apiKey),
     billing: env.stripe.enabled,

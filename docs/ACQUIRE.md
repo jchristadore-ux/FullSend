@@ -36,7 +36,7 @@ Financials and P&L remain **owner-side**. **Do not invent ARR, MRR, or user coun
 
 ## Honest positioning checklist
 
-- [ ] Lead with Instagram; mention TikTok only as optional / not audited for public posting.
+- [ ] Lead with Instagram; TikTok is gated off (`FULLSEND_TIKTOK_ENABLED` default false) — mention only as roadmap / not available, not a live destination.
 - [ ] Call it a young SaaS — early traction language only if metrics support it.
 - [ ] Mention website URL as a product source alongside GitHub when describing the product.
 - [ ] State Live Stripe billing is configured; do not claim revenue you cannot show in the data room.

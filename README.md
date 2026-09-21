@@ -44,7 +44,7 @@ Publishing is durable in the same sense. Instagram publishes in two calls — cr
 
 ## Instagram scope
 
-Instagram is the only active production social destination. The codebase may retain provider abstractions for future expansion, but the production content, scheduling, media, and publishing flow is Instagram-focused.
+Instagram is the only active production social destination. TikTok exists in the codebase but is **gated off by default** (`FULLSEND_TIKTOK_ENABLED`; see `OPERATOR_ACTIONS.md`). The production content, scheduling, media, and publishing flow is Instagram-focused.
 
 ## Billing (Stripe)
 
