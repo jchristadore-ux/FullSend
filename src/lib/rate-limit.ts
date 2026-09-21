@@ -31,6 +31,9 @@ export const LIMITS = {
   billingCheckout: { limit: 30, windowMs: 15 * 60 * 1000 },
   api: { limit: 300, windowMs: 60 * 1000 },
   authAttempt: { limit: 10, windowMs: 15 * 60 * 1000 },
+  /** Public no-signup demo — deliberately scarce. */
+  demo: { limit: 3, windowMs: 60 * 60 * 1000 },
+  demoGlobal: { limit: 60, windowMs: 60 * 60 * 1000 },
 } as const satisfies Record<string, LimitRule>;
 
 export function check(key: string, rule: LimitRule, now = Date.now()): void {
