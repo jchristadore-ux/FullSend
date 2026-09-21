@@ -4,19 +4,20 @@ import { HeroFlow } from '@/components/marketing/HeroFlow';
 import { AutopilotPanel } from '@/components/marketing/AutopilotPanel';
 import { SignInLink, StartLink } from '@/components/marketing/SessionLinks';
 import { PricingCta } from '@/components/billing/PricingCta';
+import { InteractiveDemo } from '@/components/demo/InteractiveDemo';
 import { capabilities } from '@/lib/env';
 
 export default async function LandingPage() {
   const caps = capabilities();
   const platformsLabel = caps.tiktok
-    ? 'Instagram + TikTok'
-    : 'Instagram (TikTok when connected)';
+    ? 'Instagram-first (TikTok optional)'
+    : 'Instagram-first (TikTok on the roadmap)';
   const connectItems = caps.tiktok
-    ? ['Instagram', 'TikTok', 'additional platforms as supported']
-    : ['Instagram', 'TikTok when connected', 'additional platforms as supported'];
+    ? ['Instagram (production)', 'TikTok (optional / not production-audited)', 'additional platforms as supported']
+    : ['Instagram (production)', 'TikTok on the roadmap', 'additional platforms as supported'];
   const sendTierPlatforms = caps.tiktok
-    ? 'Instagram + TikTok'
-    : 'Instagram (TikTok when connected)';
+    ? 'Instagram-first · TikTok optional'
+    : 'Instagram-first';
 
   return (
     <main className="min-h-screen bg-void">
@@ -25,6 +26,8 @@ export default async function LandingPage() {
       <Problem />
       <Solution />
       <HowItWorks connectItems={connectItems} />
+      <InteractiveDemo />
+      <Honesty />
       <BigMessage />
       <Autopilot platformsLabel={platformsLabel} />
       <Pricing sendTierPlatforms={sendTierPlatforms} billingEnabled={caps.billing} />
@@ -93,8 +96,8 @@ function Hero({ platformsLabel }: { platformsLabel: string }) {
 
             <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:items-center">
               <StartLink className="btn-send text-base" />
-              <a href="#how" className="btn-ghost text-base">
-                See how it works
+              <a href="#demo" className="btn-ghost text-base">
+                Try the live demo
               </a>
             </div>
 
@@ -506,6 +509,41 @@ function FinalCta() {
     </section>
   );
 }
+
+function Honesty() {
+  return (
+    <section className="border-b border-edge bg-ink">
+      <div className="mx-auto max-w-7xl px-5 py-16 sm:px-8 sm:py-20">
+        <span className="label">HONEST POSITIONING</span>
+        <h2 className="mt-5 max-w-3xl font-display text-3xl font-extrabold tracking-crush text-mist sm:text-4xl">
+          Instagram-first. Young product. No invented traction.
+        </h2>
+        <div className="mt-8 grid gap-px overflow-hidden border border-edge bg-edge sm:grid-cols-3">
+          {[
+            {
+              title: 'What it does',
+              body: 'Connect a GitHub repo or website → product intelligence → marketing plan → Instagram content → creative → schedule → durable publish → analytics. The pipeline is the product.',
+            },
+            {
+              title: 'Four tiers',
+              body: 'Free, Send, Full Send, Agency — live Stripe checkout when configured. Operators listed in FULLSEND_ADMIN_EMAILS keep unlimited limits without inventing a fake paid plan.',
+            },
+            {
+              title: 'What we do not claim',
+              body: 'No ARR, MRR, or user counts on this page. TikTok is on the roadmap / optional — not a production publishing destination until audited. Prefer under-claim over hype.',
+            },
+          ].map((c) => (
+            <div key={c.title} className="bg-charcoal p-6">
+              <h3 className="font-display text-lg font-extrabold tracking-tight text-mist">{c.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-dim">{c.body}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 
 function Footer() {
   return (
