@@ -38,6 +38,7 @@ export default async function CalendarPage({
         id: e.scheduledPost.id,
         contentId: e.content.id,
         scheduledFor: e.scheduledPost.scheduled_for,
+        publishedAt: e.scheduledPost.published_at,
         status: e.scheduledPost.status,
         platform: e.content.platform,
         format: e.content.format,
