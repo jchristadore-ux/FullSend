@@ -35,7 +35,7 @@ Financials and P&L remain **owner-side**; the PR that added these docs does not 
 
 ## Honest positioning checklist
 
-- [ ] Lead with Instagram; mention TikTok only as optional / not audited for public posting.
+- [ ] Lead with Instagram; TikTok is gated off (`FULLSEND_TIKTOK_ENABLED` default false) — mention only as roadmap / not available, not a live destination.
 - [ ] Call it a young SaaS — early traction language only if metrics support it.
 - [ ] Do not invent ARR or user counts in the listing or in this repo.
 - [ ] State that rights transfer via the Asset Purchase Agreement at closing; the repo `LICENSE` is proprietary until then.
