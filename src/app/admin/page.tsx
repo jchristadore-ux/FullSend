@@ -11,6 +11,7 @@ import { capabilities, env } from '@/lib/env';
 import { formatCompact, relativeTime } from '@/lib/dashboard';
 import { FullSendLockup } from '@/components/brand/Logo';
 import { MigrationsCard } from '@/components/app/MigrationsCard';
+import { loadAcquireMetrics } from '@/lib/ops/acquire-metrics';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'FullSend Control Room' };
@@ -59,6 +60,8 @@ export default async function ControlRoom() {
     aiSpend(scope, {}),
     db().find(scope, 'subscriptions', {}),
   ]);
+
+  const acquire = await loadAcquireMetrics();
 
   const caps = capabilities();
   const provider = getProvider();
@@ -162,6 +165,45 @@ export default async function ControlRoom() {
             )}
           </section>
         </div>
+
+
+        {/* Acquire data-room metrics — measured, never estimated. */}
+        <section className="panel mt-6 p-5">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <span className="label text-orange">ACQUIRE DATA ROOM</span>
+              <p className="mt-1 font-mono text-[10px] text-dimmer">
+                Measured from the live database and synced Stripe subscription rows.
+                Zeros are real. Nothing here is projected.
+              </p>
+            </div>
+            <p className="font-mono text-[10px] text-dimmer">
+              as of {new Date(acquire.measuredAt).toLocaleString('en-US', { timeZone: 'America/New_York' })} ET
+            </p>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden border border-edge bg-edge sm:grid-cols-4 lg:grid-cols-8">
+            <Stat label="Signups" value={String(acquire.signups)} />
+            <Stat label="Activated" value={String(acquire.activated)} />
+            <Stat
+              label="Activation %"
+              value={acquire.activationRate == null ? '—' : `${Math.round(acquire.activationRate * 100)}%`}
+            />
+            <Stat label="First publish" value={String(acquire.firstPublishUsers)} />
+            <Stat label="Publish volume" value={formatCompact(acquire.publishVolume)} />
+            <Stat
+              label="Job success"
+              value={acquire.jobSuccessRate == null ? '—' : `${Math.round(acquire.jobSuccessRate * 100)}%`}
+              tone={acquire.jobSuccessRate != null && acquire.jobSuccessRate < 0.8 ? 'bad' : 'good'}
+            />
+            <Stat label="MRR" value={`$${acquire.mrrUsd.toLocaleString('en-US')}`} />
+            <Stat label="Paying" value={String(acquire.payingCustomers)} />
+          </div>
+          <p className="mt-3 font-mono text-[10px] text-dimmer">
+            Jobs counted: {acquire.jobsSucceeded} succeeded · {acquire.jobsFailed} failed ·{' '}
+            {acquire.jobsDead} dead. MRR sums plan priceUsd for active/trialing rows with a
+            stripe_subscription_id — never an estimate.
+          </p>
+        </section>
 
         <MigrationsCard />
 
