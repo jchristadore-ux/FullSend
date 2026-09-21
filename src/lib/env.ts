@@ -156,6 +156,11 @@ export const env = {
     /** Shared secret required by every /api/cron/* route. */
     cronSecret: opt('CRON_SECRET'),
     maxAttempts: Number(opt('FULLSEND_JOB_MAX_ATTEMPTS') ?? '5'),
+    /**
+     * Minutes without a successful worker pass before health/Control Room
+     * report the scheduler as stale. Default 15 = three missed 5-minute pings.
+     */
+    workerStaleMinutes: Math.max(1, Number(opt('FULLSEND_WORKER_STALE_MINUTES') ?? '15')),
   },
 
   video: {
