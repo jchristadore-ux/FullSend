@@ -1,5 +1,6 @@
 'use client';
 
+import { publishDrift } from '@/lib/publish-drift';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
@@ -14,6 +15,8 @@ export interface CalendarItem {
   id: string;
   contentId: string;
   scheduledFor: string;
+  /** When the post actually went out; null until published. */
+  publishedAt: string | null;
   status: string;
   platform: string;
   format: string;
@@ -194,12 +197,37 @@ export function CalendarBoard({
                         </Link>
                         <p className="mt-0.5 flex flex-wrap items-center gap-2 font-mono text-[10px] text-dimmer">
                           <span>
+                            scheduled{' '}
                             {new Date(item.scheduledFor).toLocaleTimeString('en-US', {
                               hour: 'numeric',
                               minute: '2-digit',
                               timeZone: safeZone(timezone),
                             })}
                           </span>
+                          {item.publishedAt && (
+                            <span>
+                              · went out{' '}
+                              {new Date(item.publishedAt).toLocaleTimeString('en-US', {
+                                hour: 'numeric',
+                                minute: '2-digit',
+                                timeZone: safeZone(timezone),
+                              })}
+                              {(() => {
+                                const drift = publishDrift(item.scheduledFor, item.publishedAt);
+                                if (!drift) return null;
+                                return (
+                                  <span
+                                    className={
+                                      drift.lateMs > 5 * 60_000 ? ' text-warn' : ' text-live'
+                                    }
+                                  >
+                                    {' '}
+                                    ({drift.label})
+                                  </span>
+                                );
+                              })()}
+                            </span>
+                          )}
                           <span className="uppercase">{item.platform}</span>
                           <span className="uppercase">{item.format}</span>
                         </p>
