@@ -31,6 +31,11 @@ export const LIMITS = {
   billingCheckout: { limit: 30, windowMs: 15 * 60 * 1000 },
   api: { limit: 300, windowMs: 60 * 1000 },
   authAttempt: { limit: 10, windowMs: 15 * 60 * 1000 },
+  /**
+   * Per-tenant AI provider calls. The shared key must not be exhaustible by
+   * one account; see src/lib/ai/tenant-limit.ts for the env override.
+   */
+  aiTenant: { limit: 40, windowMs: 60 * 60 * 1000 },
 } as const satisfies Record<string, LimitRule>;
 
 export function check(key: string, rule: LimitRule, now = Date.now()): void {
