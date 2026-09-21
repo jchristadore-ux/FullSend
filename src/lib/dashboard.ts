@@ -51,6 +51,7 @@ export interface SendCenterData {
     platform: string;
     format: string;
     permalink: string | null;
+    scheduledFor: string | null;
     publishedAt: string;
     engagement: number;
     reach: number;
@@ -124,6 +125,7 @@ export async function loadSendCenter(
         platform: post.platform,
         format: content?.format ?? 'static',
         permalink: post.permalink,
+        scheduledFor: content?.scheduled_for ?? null,
         publishedAt: post.published_at,
         engagement: perf?.engagement ?? 0,
         reach: perf?.metrics.reach ?? 0,
@@ -267,3 +269,5 @@ function safeZone(tz: string): string | undefined {
     return undefined;
   }
 }
+
+export { publishDrift } from './publish-drift';
