@@ -9,6 +9,7 @@ import { PipelineCard } from '@/components/app/PipelineCard';
 import { AttentionBanner } from '@/components/app/AttentionBanner';
 import { MobileSummary } from '@/components/app/MobileSummary';
 import { SwitchProjectPrompt } from '@/components/app/SwitchProjectPrompt';
+import { FirstRunGuide, buildFirstRunSteps } from '@/components/onboarding/FirstRunGuide';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'The Send Center' };
@@ -102,6 +103,16 @@ export default async function SendCenter() {
       )}
 
       {/* Where the machine actually is, and what to press when a step fails. */}
+      <FirstRunGuide
+        steps={buildFirstRunSteps({
+          hasAnalysis: data.hasAnalysis,
+          hasConnectedAccount: data.accounts.length > 0,
+          strategyApproved: data.strategyApproved,
+          hasContent: data.metrics.postsScheduled + data.metrics.postsPublished > 0,
+          hasPublished: data.metrics.postsPublished > 0,
+        })}
+      />
+
       <PipelineCard projectId={project.id} />
 
       {/* On a phone, four facts and a tap. The full command centre is desktop. */}
