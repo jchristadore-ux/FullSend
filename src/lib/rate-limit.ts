@@ -34,6 +34,11 @@ export const LIMITS = {
   /** Public no-signup demo — deliberately scarce. */
   demo: { limit: 3, windowMs: 60 * 60 * 1000 },
   demoGlobal: { limit: 60, windowMs: 60 * 60 * 1000 },
+  /**
+   * Per-tenant AI provider calls. The shared key must not be exhaustible by
+   * one account; see src/lib/ai/tenant-limit.ts for the env override.
+   */
+  aiTenant: { limit: 40, windowMs: 60 * 60 * 1000 },
 } as const satisfies Record<string, LimitRule>;
 
 export function check(key: string, rule: LimitRule, now = Date.now()): void {

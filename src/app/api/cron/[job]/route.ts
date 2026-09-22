@@ -6,6 +6,7 @@ import { systemScope } from '@/lib/db';
 import { db, enqueue } from '@/lib/db/repo';
 import { CRON_MAX_HEAVY_PER_PASS, cronSecretValid, drainQueue } from '@/lib/jobs/runner';
 import { enqueueDuePublishJobs, projectsForAutopilot } from '@/lib/automation/autopilot';
+import { reclaimStalePublishing } from '@/lib/publish/reclaim';
 import { sweep } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -90,9 +91,10 @@ async function runCronJob(job: string): Promise<Record<string, unknown>> {
       return { ...(await drainQueue({ max: 25, budgetMs: DRAIN_BUDGET_MS, maxHeavy: CRON_MAX_HEAVY_PER_PASS })) };
 
     case 'publish': {
+      const reclaimed = await reclaimStalePublishing(scope);
       const queued = await enqueueDuePublishJobs(50);
       const drained = await drainQueue({ max: 5, budgetMs: DRAIN_BUDGET_MS, maxHeavy: CRON_MAX_HEAVY_PER_PASS });
-      return { ...queued, ...drained };
+      return { reclaimed, ...queued, ...drained };
     }
 
     case 'daily': {

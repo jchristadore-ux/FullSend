@@ -36,6 +36,20 @@ function emit(level: Level, scope: string, message: string, meta?: Record<string
   if (level === 'error') console.error(text);
   else if (level === 'warn') console.warn(text);
   else console.log(text);
+
+  // Zero-config error feed (+ optional Sentry). Fire-and-forget — never block
+  // the caller, never turn a log line into a thrown failure.
+  if (level === 'error') {
+    void import('./ops/error-tracking')
+      .then(({ captureError }) =>
+        captureError(message, {
+          scope,
+          level: 'error',
+          meta: meta ? (redact(meta) as Record<string, unknown>) : undefined,
+        }),
+      )
+      .catch(() => undefined);
+  }
 }
 
 export function logger(scope: string) {

@@ -13,27 +13,13 @@ import { DeterministicProvider } from './deterministic-provider';
 import { AnthropicProvider } from './anthropic-provider';
 import { OpenAiProvider } from './openai-provider';
 import type { AiMessage, AiProvider, CompletionRequest, CompletionResponse, ModelTier } from './types';
+import { assertTenantAiAllowance } from './tenant-limit';
 
 const log = logger('ai');
 let cached: AiProvider | null = null;
 const GENERATION_BUDGET_MS = 50_000;
 const REPAIR_RESERVE_MS = 10_000;
 
-/**
- * Tasks that may be composed when the model's own answer is unusable.
- *
- * The line is what a stage reads. Everything here transforms an artefact that
- * has already been checked against the repository — the product analysis —
- * so composing one rearranges facts that are already true.
- *
- * `analysis.product` is deliberately absent, and that absence is the point.
- * It is the only stage whose input is the repository itself, so a composed
- * analysis would be a guess presented as a reading of somebody's code, and
- * every later stage's honesty rests on it: the content rules forbid claiming a
- * capability that is not in the verified feature list, and this is where that
- * list comes from. If a model cannot read the repository, FullSend says so
- * rather than inventing a product.
- */
 const COMPOSABLE_TASKS: ReadonlySet<string> = new Set([
   'analysis.personas',
   'strategy.build',
@@ -73,22 +59,7 @@ export interface GenerateResult<T> {
   costUsd: number;
   model: string;
   cacheHit: boolean;
-  /**
-   * True when a live provider was configured, failed, and the deterministic
-   * composer stood in for it.
-   *
-   * Deliberately narrower than "was composed". Running with no API key at all
-   * puts the whole install in `mock` mode: the composer *is* the provider,
-   * templates are the expected output, and the operator chose that. This flag
-   * means something different and worse — the founder configured a real model,
-   * paid for it, and silently got templates instead, with nothing on screen
-   * saying so.
-   *
-   * Callers need to know because the right response is not the same for every
-   * stage. A composed marketing plan is scaffolding a founder reviews before
-   * anything acts on it. A composed post goes to a public feed under their
-   * name and cannot be taken back.
-   */
+  
   degraded: boolean;
 }
 
@@ -97,6 +68,10 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
   const provider = getProvider();
   const tier = opts.tier ?? tierFor(opts.task);
   const model = provider.modelFor(tier);
+  await assertTenantAiAllowance({
+    userId: opts.attribution?.userId ?? null,
+    projectId: opts.attribution?.projectId ?? null,
+  });
   await assertWithinBudget(opts.attribution?.projectId ?? null);
 
   // Keep the complete schema for local repair/validation. Provider dialects are
@@ -148,31 +123,7 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
       }
     }
 
-    /*
-     * Compose it rather than lose the run.
-     *
-     * A model that omits a required field is not an outage and not a bug in
-     * this code — it is a coin flip. The same strategy request succeeded that
-     * morning and failed that afternoon on `value_proposition` and
-     * `posting_cadence`, and a founder five days into a launch lost the whole
-     * pipeline to it. Every stage carries this risk, because every stage
-     * validates a model's JSON against a schema it can decline to honour.
-     *
-     * The deterministic composer already exists for exactly this, and says so
-     * in its own header: a provider failure should degrade the machine, not
-     * stop it. It was only ever reachable when no API key was configured,
-     * which is the one case where it is least needed. Wiring it in here makes
-     * it the floor under every task it covers — analysis, strategy, brand,
-     * content, optimizer, weekly report, trends — all of them.
-     *
-     * Nothing is faked by doing this. The composer builds from the verified
-     * product analysis rather than inventing claims, the usage ledger records
-     * the provider as `deterministic`, and the UI reads the provider from
-     * there — so a composed plan is visibly a composed plan.
-     *
-     * It is a floor, not a hiding place: the result is validated like any
-     * other, and if it does not hold up the original error is still thrown.
-     */
+    
     const composed = await composeFallback(opts, req, maxTokens, validationSchema);
     if (composed) {
       log.warn('AI output was unusable; composed this stage deterministically instead', {
@@ -194,13 +145,6 @@ export async function generateObject<T>(opts: GenerateOptions<T>): Promise<Gener
   return { data: parsed.value, costUsd: totalCost, model: response.model, cacheHit: false, degraded: false };
 }
 
-/**
- * The composer's answer to the same request, if it can produce a valid one.
- *
- * Returns null rather than throwing: this is the last thing tried before
- * giving up, and a failure here must leave the model's own error as the one
- * reported, not replace it with a confusing second one.
- */
 async function composeFallback<T>(
   opts: GenerateOptions<T>,
   req: CompletionRequest,
