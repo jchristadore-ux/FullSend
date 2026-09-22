@@ -7,9 +7,12 @@
  * check sees `queued` and reports progress — through five attempts, with
  * exponential backoff, on a queue that drains every few minutes at best.
  *
- * `attempts` is what separates the two: a job that has never run has none.
- * Non-zero attempts with an error recorded means it has already failed at
- * least once, and something is wrong now rather than eventually.
+ * `last_error` is what separates the two: a job that has never run has none.
+ * An error recorded on a non-succeeded row means it has already failed at
+ * least once, and something is wrong now rather than eventually. Do not also
+ * require `attempts > 0` — a direct `runJob` (and any path that writes the
+ * error without bumping the counter) must still surface as failed rather than
+ * as endless progress.
  *
  * Shared, because this was fixed once on the calendar and the onboarding
  * screen went on spinning on "Reading repository" with the answer sitting
@@ -85,7 +88,9 @@ export function hasFailed(job: JobProgress | null | undefined): boolean {
   if (!job) return false;
   if (job.status === 'dead' || job.status === 'failed') return true;
   if (isStalled(job)) return true;
-  return job.status !== 'succeeded' && (job.attempts ?? 0) > 0 && Boolean(job.error);
+  // last_error is the durable signal. A never-run job has none; a retryable
+  // failure requeues with the reason set even when attempts was not persisted.
+  return job.status !== 'succeeded' && Boolean(job.error);
 }
 
 /** True while the job is genuinely still working and has not failed yet. */
