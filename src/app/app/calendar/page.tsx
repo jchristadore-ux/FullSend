@@ -44,6 +44,7 @@ export default async function CalendarPage({
         hook: e.content.hook,
         lastError: e.scheduledPost.last_error,
         attempts: e.scheduledPost.attempts,
+        publishedAt: e.scheduledPost.published_at,
         preview: asset ? (asset.url ?? (asset.svg ? svgDataUri(asset.svg) : null)) : null,
       };
     }),

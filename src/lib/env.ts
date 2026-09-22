@@ -172,6 +172,8 @@ export const env = {
   jobs: {
     /** Shared secret required by every /api/cron/* route. */
     cronSecret: opt('CRON_SECRET'),
+    /** Minutes without a successful worker pass before health reports the scheduler stale. */
+    workerStaleMinutes: Math.max(1, Number(opt('FULLSEND_WORKER_STALE_MINUTES') ?? '15')),
     maxAttempts: Number(opt('FULLSEND_JOB_MAX_ATTEMPTS') ?? '5'),
   },
 
