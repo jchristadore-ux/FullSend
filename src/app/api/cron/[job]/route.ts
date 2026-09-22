@@ -6,7 +6,7 @@ import { systemScope } from '@/lib/db';
 import { db, enqueue } from '@/lib/db/repo';
 import { CRON_MAX_HEAVY_PER_PASS, cronSecretValid, drainQueue } from '@/lib/jobs/runner';
 import { enqueueDuePublishJobs, projectsForAutopilot } from '@/lib/automation/autopilot';
-import { reclaimStalePublishing } from '@/lib/publish/publish';
+import { reclaimStalePublishing } from '@/lib/publish/reclaim';
 import { sweep } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
