@@ -203,6 +203,22 @@ export const env = {
      * write access on that repository.
      */
     issueRepo: opt('FULLSEND_ISSUE_REPO'),
+    /**
+     * Optional Sentry DSN. Unset: structured logs + in-process error ring
+     * (Control Room / authorised health). Set: same feed upgrades to Sentry.
+     * Getter so late serverless env is visible.
+     */
+    get sentryDsn() {
+      return opt('SENTRY_DSN');
+    },
+  },
+
+  aiTenant: {
+    /** Max AI generateObject calls per tenant per hour. */
+    get hourlyLimit() {
+      const n = Number(opt('FULLSEND_AI_TENANT_HOURLY_LIMIT') ?? '40');
+      return Number.isFinite(n) && n > 0 ? Math.floor(n) : 40;
+    },
   },
 
   admin: {
