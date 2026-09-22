@@ -1,1 +1,1 @@
-PLACEHOLDER
+@file:///workspace/rel-ready/client.ts
