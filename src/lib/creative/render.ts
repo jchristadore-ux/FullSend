@@ -59,6 +59,10 @@ export async function renderCreative(
    * claiming something false about somebody else's product.
    */
   const palette = paletteFor(brand);
+  // Inline the mark before typesetting. Remote <image href> breaks preview
+  // (SVG-as-<img> cannot fetch nested URLs) and was also mangled by font-stack
+  // escaping — both produce a broken-image icon instead of a logo.
+  const logoEmbed = await resolveLogoEmbed(palette.logoUrl);
 
   if (item.format === 'carousel' && item.slides?.length) {
     for (let i = 0; i < item.slides.length; i++) {
@@ -77,7 +81,7 @@ export async function renderCreative(
             palette,
             size,
             footer: project.name,
-            logoUrl: palette.logoUrl,
+            logoUrl: logoEmbed,
           }),
           alt_text: `${slide.headline} — slide ${i + 1} of ${item.slides.length}`,
         }),
@@ -120,7 +124,7 @@ export async function renderCreative(
         size,
         footer: project.name,
         badge: labelFor(item),
-        logoUrl: palette.logoUrl,
+        logoUrl: logoEmbed,
       }),
       alt_text: item.hook,
     }),
@@ -416,18 +420,94 @@ ${index === total - 1 ? `  <text x="${pad}" y="${size.h - pad - 18}" font-size="
 }
 
 /**
- * The product's own mark, top-right, when discovery found one.
+ * Cap on bytes we will inline into an SVG. Larger marks are skipped rather than
+ * ballooning every creative asset — colour and type still carry the brand.
+ */
+const MAX_LOGO_EMBED_BYTES = 1_500_000;
+
+const LOGO_FETCH_MS = 8_000;
+
+/**
+ * Fetch a remote brand mark and return a data URI suitable for SVG `<image>`.
  *
- * Only http(s) URLs are accepted — a card must never pull an arbitrary scheme.
- * Rasterisation may skip remote images on some hosts; the brand colour bar and
- * type still carry the identity when the mark cannot be drawn.
+ * Returns null (omit the slot) when the URL is missing, not http(s), fails to
+ * fetch, is not an image, or is too large. Never returns a bare remote URL —
+ * those render as broken-image icons in Send Center previews (SVG served as a
+ * data-URI `<img>`, which cannot load nested remote resources) and used to be
+ * further mangled by font-stack attribute escaping.
+ */
+export async function resolveLogoEmbed(
+  logoUrl: string | null | undefined,
+): Promise<string | null> {
+  if (!logoUrl) return null;
+  const url = logoUrl.trim();
+  if (!url) return null;
+  if (/^data:image\//i.test(url)) return url;
+  if (!/^https?:\/\//i.test(url)) return null;
+
+  try {
+    const res = await fetch(url, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(LOGO_FETCH_MS),
+      headers: { Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8' },
+    });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.byteLength === 0 || buf.byteLength > MAX_LOGO_EMBED_BYTES) return null;
+    const headerType = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    const mime = imageMime(headerType, url);
+    if (!mime) return null;
+    return `data:${mime};base64,${buf.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+function imageMime(contentType: string, url: string): string | null {
+  if (contentType.startsWith('image/')) {
+    // Some hosts send image/jpg — normalize so sharp and browsers agree.
+    if (contentType === 'image/jpg') return 'image/jpeg';
+    return contentType;
+  }
+  if (/\.png(\?|$)/i.test(url)) return 'image/png';
+  if (/\.(jpe?g)(\?|$)/i.test(url)) return 'image/jpeg';
+  if (/\.gif(\?|$)/i.test(url)) return 'image/gif';
+  if (/\.webp(\?|$)/i.test(url)) return 'image/webp';
+  if (/\.svg(\?|$)/i.test(url)) return 'image/svg+xml';
+  return null;
+}
+
+/**
+ * Escape a value for use inside a double-quoted SVG attribute.
+ *
+ * Distinct from `escAttr`, which is for font stacks and rewrites the string
+ * through `withBundledFallback` — that path turned every logo URL into
+ * `…png, Inter, sans-serif` and produced the broken-image icon on cover cards.
+ */
+function escHref(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/**
+ * The product's own mark, top-right, when we have an embeddable data URI.
+ *
+ * Remote http(s) URLs are intentionally refused here — pass them through
+ * `resolveLogoEmbed` first. Omitting the slot is better than a broken icon:
+ * the accent bar and type still show the brand.
  */
 function logoMark(logoUrl: string | null | undefined, size: { w: number; h: number }, pad: number): string {
-  if (!logoUrl || !/^https?:\/\//i.test(logoUrl.trim())) return '';
+  if (!logoUrl) return '';
+  const embed = logoUrl.trim();
+  // Only data URIs — never leave a remote href that browsers paint as broken.
+  if (!/^data:image\//i.test(embed)) return '';
   const side = Math.round(size.w * 0.11);
   const x = size.w - pad - side;
   const y = pad;
-  return `<image href="${escAttr(logoUrl.trim())}" x="${x}" y="${y}" width="${side}" height="${side}" preserveAspectRatio="xMidYMid meet"/>`;
+  return `<image href="${escHref(embed)}" x="${x}" y="${y}" width="${side}" height="${side}" preserveAspectRatio="xMidYMid meet"/>`;
 }
 
 /** Data URI form, for previewing an asset without a storage round-trip. */

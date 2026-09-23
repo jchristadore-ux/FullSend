@@ -598,19 +598,65 @@ describe('brand-specific creative', () => {
       ],
     });
 
-    const outcome = await materializeCreative(ctx.scope, {
-      project,
-      item,
-      brand,
-      analysis: refreshed!,
-    });
+    // Logo fetch will fail (cdn.example is not real) — cover must still draw
+    // brand colours and must NOT leave a broken <image href="https://…">.
+    const prev = globalThis.fetch;
+    globalThis.fetch = (async () => new Response('gone', { status: 404 })) as typeof fetch;
+    try {
+      const outcome = await materializeCreative(ctx.scope, {
+        project,
+        item,
+        brand,
+        analysis: refreshed!,
+      });
 
-    expect(outcome.failed).toBe(false);
-    expect(outcome.assets.some((a) => a.source === 'repo_screenshot')).toBe(true);
-    expect(outcome.assets.some((a) => a.url === 'https://cdn.example/home.png')).toBe(true);
-    const cover = outcome.assets.find((a) => a.source === 'svg_render');
-    expect(cover?.svg).toContain('#0e2b20');
-    expect(cover?.svg).toContain('https://cdn.example/logo.png');
+      expect(outcome.failed).toBe(false);
+      expect(outcome.assets.some((a) => a.source === 'repo_screenshot')).toBe(true);
+      expect(outcome.assets.some((a) => a.url === 'https://cdn.example/home.png')).toBe(true);
+      const cover = outcome.assets.find((a) => a.source === 'svg_render');
+      expect(cover?.svg).toContain('#0e2b20');
+      expect(cover?.svg).not.toContain('<image');
+      expect(cover?.svg).not.toContain('https://cdn.example/logo.png');
+    } finally {
+      globalThis.fetch = prev;
+    }
+  });
+
+  it('inlines a remote logo into the cover SVG when fetch succeeds', async () => {
+    const ctx = await setupContext();
+    const project = await createProject(ctx.scope, ctx.user.id, { name: 'PlayPal' });
+    const brand = await brandFor(ctx, project, {
+      primary_color: '#0e2b20',
+      background_color: '#f7f4ef',
+      text_color: '#1a1a1a',
+      logo_url: 'https://cdn.example/logo.png',
+    });
+    const analysis = await analysisFor(ctx, project);
+    const item = await itemFor(ctx, project);
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const prev = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(png, { status: 200, headers: { 'content-type': 'image/png' } })) as typeof fetch;
+    try {
+      const outcome = await materializeCreative(ctx.scope, {
+        project,
+        item,
+        brand,
+        analysis,
+      });
+      expect(outcome.failed).toBe(false);
+      const cover = outcome.assets.find((a) => a.source === 'svg_render');
+      expect(cover?.svg).toContain('data:image/png;base64,');
+      expect(cover?.svg).toContain('<image href="data:image/png');
+      expect(cover?.svg).not.toContain('https://cdn.example/logo.png');
+      // Font-stack escaping must never rewrite the href.
+      expect(cover?.svg).not.toMatch(/data:image\/png[^"]*, Inter/);
+    } finally {
+      globalThis.fetch = prev;
+    }
   });
 });
 
