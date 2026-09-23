@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { discoverBrandIdentityFromHtml } from '@/lib/brand/discover';
 import { identityFrom, identityPatch, paletteFor, NEUTRAL_PALETTE } from '@/lib/brand/identity';
-import { hookCard, slideCard } from '@/lib/creative/render';
+import { hookCard, resolveLogoEmbed, slideCard } from '@/lib/creative/render';
 import type { BrandProfile, ProductAnalysis } from '@/lib/types';
 
 const SAMPLE_HTML = `<!doctype html>
@@ -84,6 +84,8 @@ describe('brand identity → render palette → card', () => {
     expect(palette.accent.toLowerCase()).toBe('#0e2b20');
     expect(palette.accent.toLowerCase()).not.toBe(NEUTRAL_PALETTE.accent.toLowerCase());
 
+    // Remote logos are not inlined by hookCard itself — that path used to leave
+    // a broken <image href>. Colour identity still lands without the mark.
     const svg = hookCard({
       hook: 'Golf nights, sorted',
       cta: 'Try PlayPal',
@@ -94,11 +96,11 @@ describe('brand identity → render palette → card', () => {
       logoUrl: brand.logo_url,
     });
     expect(svg).toContain('#0e2b20');
-    expect(svg).toContain('apple-touch-icon.png');
+    expect(svg).not.toContain('<image');
     expect(svg).not.toContain('#ff5a1f');
   });
 
-  it('puts the logo on a carousel cover when discovery found one', () => {
+  it('puts an inlined logo on a carousel cover when the mark resolved', () => {
     const palette = paletteFor({
       primary_color: '#123456',
       secondary_color: '',
@@ -109,6 +111,7 @@ describe('brand identity → render palette → card', () => {
       body_font: 'Inter',
       logo_url: 'https://cdn.example/logo.png',
     });
+    const embed = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     const cover = slideCard({
       headline: 'Three taps',
       body: 'That is the whole flow.',
@@ -117,9 +120,11 @@ describe('brand identity → render palette → card', () => {
       palette,
       size: { w: 1080, h: 1350 },
       footer: 'Acme',
-      logoUrl: palette.logoUrl,
+      logoUrl: embed,
     });
-    expect(cover).toContain('https://cdn.example/logo.png');
+    expect(cover).toContain('data:image/png;base64,');
+    expect(cover).toContain('<image href="data:image/png');
+    expect(cover).not.toContain('https://cdn.example/logo.png');
   });
 });
 
@@ -136,5 +141,45 @@ describe('website analysis identity slot', () => {
     } as unknown as ProductAnalysis;
     const back = identityFrom(analysis);
     expect(back?.primary_color?.value.toLowerCase()).toBe('#0e2b20');
+  });
+});
+
+describe('resolveLogoEmbed', () => {
+  const PNG_BYTES = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+
+  it('inlines a remote logo URL as a data URI', async () => {
+    const prev = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(PNG_BYTES, { status: 200, headers: { 'content-type': 'image/png' } })) as typeof fetch;
+    try {
+      const embed = await resolveLogoEmbed('https://cdn.example/logo.png');
+      expect(embed).toMatch(/^data:image\/png;base64,/);
+      expect(embed!.length).toBeGreaterThan('data:image/png;base64,'.length);
+    } finally {
+      globalThis.fetch = prev;
+    }
+  });
+
+  it('omits the mark cleanly when the remote fetch fails', async () => {
+    const prev = globalThis.fetch;
+    globalThis.fetch = (async () => new Response('nope', { status: 404 })) as typeof fetch;
+    try {
+      await expect(resolveLogoEmbed('https://cdn.example/missing.png')).resolves.toBeNull();
+    } finally {
+      globalThis.fetch = prev;
+    }
+  });
+
+  it('passes through an already-inlined data URI', async () => {
+    const data = 'data:image/png;base64,abc';
+    await expect(resolveLogoEmbed(data)).resolves.toBe(data);
+  });
+
+  it('refuses non-http schemes rather than embedding them', async () => {
+    await expect(resolveLogoEmbed('file:///etc/passwd')).resolves.toBeNull();
+    await expect(resolveLogoEmbed('javascript:alert(1)')).resolves.toBeNull();
   });
 });
