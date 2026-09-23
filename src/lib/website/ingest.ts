@@ -8,6 +8,10 @@
  */
 import 'server-only';
 import { logger } from '../logger';
+import {
+  discoverBrandIdentityFromHtml,
+  type BrandIdentity,
+} from '../brand/discover';
 import type { AppScreen } from '../types';
 import { fetchPublicHtml, type FetchedPage } from './fetch';
 import { assertSafePublicUrl } from './ssrf';
@@ -47,6 +51,8 @@ export interface WebsiteBundle {
   contentHash: string;
   signals: WebsiteSignals;
   screens: AppScreen[];
+  /** Visual identity parsed from the fetched HTML — never invented. */
+  identity: BrandIdentity;
 }
 
 export async function ingestWebsite(
@@ -58,6 +64,9 @@ export async function ingestWebsite(
   const home = await fetchPage(start);
   const origin = new URL(home.finalUrl).origin;
   const homeSignals = extractPage(home);
+  const htmlPages: { url: string; html: string }[] = [
+    { url: home.finalUrl, html: home.body },
+  ];
 
   const candidates = discoverExtraPaths(homeSignals, origin).slice(0, MAX_EXTRA_PAGES);
   const extras: WebsitePageSignals[] = [];
@@ -71,6 +80,7 @@ export async function ingestWebsite(
       // Stay same-origin after redirects.
       if (new URL(page.finalUrl).origin !== origin) continue;
       extras.push(extractPage(page));
+      htmlPages.push({ url: page.finalUrl, html: page.body });
     } catch (e) {
       truncated = true;
       log.info('skipped linked page', { path, error: String(e) });
@@ -103,13 +113,18 @@ export async function ingestWebsite(
     truncated,
   };
 
-  const screens = headingsToScreens(headings, home.finalUrl);
+  const identity = discoverBrandIdentityFromHtml(htmlPages);
+  const screens = [
+    ...ogImageScreens(htmlPages),
+    ...headingsToScreens(headings, home.finalUrl),
+  ];
 
   log.info('website ingested', {
     url: start,
     final: home.finalUrl,
     pages: pages.length,
     headings: headings.length,
+    brandUnresolved: identity.evidence.unresolved.length,
   });
 
   return {
@@ -119,6 +134,7 @@ export async function ingestWebsite(
     contentHash: home.contentHash,
     signals,
     screens,
+    identity,
   };
 }
 
@@ -192,6 +208,44 @@ function collectSameOriginLinks(html: string, baseUrl: string): string[] {
     }
   }
   return unique(out).slice(0, 80);
+}
+
+/**
+ * Real visuals the site already publishes. Headings alone have no image_url, so
+ * without this every website creative fell back to a text card with no product
+ * chrome — the opposite of "look like the app".
+ */
+function ogImageScreens(pages: { url: string; html: string }[]): AppScreen[] {
+  const out: AppScreen[] = [];
+  const seen = new Set<string>();
+  for (const page of pages) {
+    for (const m of page.html.matchAll(/<meta\b[^>]*>/gi)) {
+      const tag = m[0];
+      if (!/(property|name)\s*=\s*["']?(og:image|twitter:image)["']?/i.test(tag)) continue;
+      const content = /content\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
+      if (!content) continue;
+      let absolute: string;
+      try {
+        const u = new URL(content, page.url);
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') continue;
+        absolute = u.href;
+      } catch {
+        continue;
+      }
+      if (seen.has(absolute)) continue;
+      seen.add(absolute);
+      out.push({
+        name: 'Product visual',
+        route: safePath(page.url),
+        purpose: 'Open Graph image published on the product website',
+        key_elements: ['og:image'],
+        workflow: null,
+        image_url: absolute,
+        source_file: `${page.url}#og-image`,
+      });
+    }
+  }
+  return out.slice(0, 3);
 }
 
 function headingsToScreens(headings: string[], pageUrl: string): AppScreen[] {

@@ -527,6 +527,8 @@ async function runWebsiteAnalysis(
       final_url: bundle.finalUrl,
       content_hash: bundle.contentHash,
       signals: bundle.signals,
+      // Same slot the GitHub path writes — strategy/buildBrandProfile reads it.
+      brand_identity: bundle.identity,
     },
     // Content hash rides in raw_signals; commit_sha stays null for websites.
     commit_sha: null,

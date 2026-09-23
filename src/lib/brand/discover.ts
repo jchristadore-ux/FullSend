@@ -250,6 +250,150 @@ export async function discoverBrandIdentity(
   return identity;
 }
 
+/**
+ * Reads a product's visual identity out of fetched website HTML.
+ *
+ * Same rules as repository discovery: parse only, never invent. Website apps
+ * never went through `discoverBrandIdentity`, so their brand profile stayed
+ * empty and every Instagram card rendered in the neutral palette — which is
+ * exactly "the posts do not look like the app". This closes that path using
+ * the HTML parsers already shared with the repo path (`theme-color`, inline
+ * `<style>`, fonts, title) plus the marks a public page actually publishes
+ * (`og:image`, apple-touch-icon).
+ */
+export function discoverBrandIdentityFromHtml(
+  pages: { url: string; html: string }[],
+): BrandIdentity {
+  const identity: BrandIdentity = {
+    evidence: {
+      style_files: [],
+      color_tokens: [],
+      font_families: [],
+      logo_candidates: [],
+      unresolved: [],
+    },
+  };
+
+  if (pages.length === 0) {
+    identity.evidence.unresolved.push(
+      'primary_color',
+      'heading_font',
+      'body_font',
+      'logo_url',
+      'brand_name',
+    );
+    return identity;
+  }
+
+  const sources: Source[] = pages.map((page, i) => ({
+    path: page.url || `page-${i + 1}`,
+    body: page.html,
+    rank: i === 0 ? 4 : 3,
+    kind: 'html' as const,
+  }));
+  identity.evidence.style_files = sources.map((s) => s.path);
+
+  const cssLike: Source[] = sources.flatMap((src) =>
+    inlineStyles(src.body).map((body) => ({ ...src, body, kind: 'css' as const })),
+  );
+
+  for (const src of cssLike) {
+    identity.evidence.color_tokens.push(
+      ...extractColorTokens(src.body).map((t) => ({ ...t, source: src.path })),
+    );
+    identity.evidence.font_families.push(
+      ...extractFontStacks(src.body).map((value) => ({ value, source: src.path })),
+    );
+  }
+
+  assignColors(identity, sources, cssLike);
+  assignFonts(identity, cssLike);
+  assignBrandName(identity, sources);
+  assignWebsiteLogos(identity, pages);
+
+  for (const field of [
+    'brand_name',
+    'primary_color',
+    'secondary_color',
+    'accent_color',
+    'background_color',
+    'text_color',
+    'heading_font',
+    'body_font',
+    'logo_url',
+  ] as const) {
+    if (!identity[field]) identity.evidence.unresolved.push(field);
+  }
+
+  log.info('brand identity discovered from website', {
+    pages: pages.length,
+    tokens: identity.evidence.color_tokens.length,
+    logos: identity.evidence.logo_candidates.length,
+    unresolved: identity.evidence.unresolved.length,
+  });
+
+  return identity;
+}
+
+/** Public-page marks: og:image and touch icons, never a invented favicon guess. */
+function assignWebsiteLogos(
+  identity: BrandIdentity,
+  pages: { url: string; html: string }[],
+): void {
+  const candidates: { path: string; url: string; rank: number }[] = [];
+  for (const page of pages) {
+    const base = page.url;
+    for (const hit of htmlImageCandidates(page.html)) {
+      const absolute = absolutizeUrl(hit.href, base);
+      if (!absolute) continue;
+      candidates.push({ path: absolute, url: absolute, rank: hit.rank });
+    }
+  }
+  candidates.sort((a, b) => b.rank - a.rank);
+  const seen = new Set<string>();
+  const unique = candidates.filter((c) => {
+    if (seen.has(c.url)) return false;
+    seen.add(c.url);
+    return true;
+  });
+  identity.evidence.logo_candidates = unique.slice(0, 6).map((c) => ({
+    path: c.path,
+    url: c.url,
+  }));
+  const best = unique[0];
+  if (best) identity.logo_url = { value: best.url, source: best.path };
+}
+
+function htmlImageCandidates(html: string): { href: string; rank: number }[] {
+  const out: { href: string; rank: number }[] = [];
+  for (const m of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const tag = m[0];
+    if (!/(property|name)\s*=\s*["']?(og:image|twitter:image)["']?/i.test(tag)) continue;
+    const content = /content\s*=\s*["']([^"']+)["']/i.exec(tag);
+    if (content?.[1]) out.push({ href: content[1], rank: 3 });
+  }
+  for (const m of html.matchAll(/<link\b[^>]*>/gi)) {
+    const tag = m[0];
+    const rel = /rel\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.toLowerCase() ?? '';
+    if (!rel) continue;
+    const href = /href\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
+    if (!href) continue;
+    if (rel.includes('apple-touch-icon')) out.push({ href, rank: 4 });
+    else if (rel === 'icon' || rel.includes('shortcut icon')) out.push({ href, rank: 1 });
+  }
+  return out;
+}
+
+function absolutizeUrl(href: string, base: string): string | null {
+  try {
+    const u = new URL(href, base);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.href;
+  } catch {
+    return null;
+  }
+}
+
 /* ── HTML ───────────────────────────────────────────────────────────────── */
 
 /** The contents of every `<style>` block, which is CSS by any other name. */

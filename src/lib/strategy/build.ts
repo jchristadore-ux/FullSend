@@ -69,7 +69,7 @@ what words it never uses, and how its visuals should feel. This profile is attac
 to every single post the machine generates, so it must be concrete and enforceable,
 not aspirational.
 
-You may be shown the product's real visual identity, read out of its own repository:
+You may be shown the product's real visual identity, read out of its own repository or website:
 its colours, its typefaces, its logo, and the files each came from. Describe and
 build on what you are shown. Never contradict it, and never state a colour or a
 typeface yourself — those are read from the repository, not chosen by you, and any
@@ -334,7 +334,7 @@ export async function buildBrandProfile(
       // Read from the repository. Present so the description matches the
       // product; absent when the repository said nothing, in which case the
       // system prompt requires the model to say so rather than invent.
-      visual_identity_from_repository: identity
+      visual_identity_from_source: identity
         ? {
             colors: {
               primary: identity.primary_color?.value ?? null,
@@ -350,7 +350,7 @@ export async function buildBrandProfile(
             logo: identity.logo_url?.value ?? null,
             read_from: identity.evidence.style_files,
             named_color_tokens: identity.evidence.color_tokens.slice(0, 25),
-            not_found_in_repository: identity.evidence.unresolved,
+            not_found_in_source: identity.evidence.unresolved,
           }
         : null,
       baseline_words_to_avoid: FULLSEND_VOICE.wordsToAvoid,

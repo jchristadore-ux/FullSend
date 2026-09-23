@@ -77,8 +77,25 @@ export async function renderCreative(
             palette,
             size,
             footer: project.name,
+            logoUrl: palette.logoUrl,
           }),
           alt_text: `${slide.headline} — slide ${i + 1} of ${item.slides.length}`,
+        }),
+      );
+    }
+    // Real product chrome belongs in the carousel when the source gave us one.
+    const screen = findScreenForItem(item, analysis) ?? firstScreenWithImage(analysis);
+    if (screen?.image_url) {
+      assets.push(
+        await save(scope, project.id, item.id, {
+          kind: 'carousel_slide',
+          source: 'repo_screenshot',
+          width: size.w,
+          height: size.h,
+          url: screen.image_url,
+          svg: null,
+          mime_type: guessMime(screen.image_url),
+          alt_text: `${screen.name} in ${project.name}`,
         }),
       );
     }
@@ -103,6 +120,7 @@ export async function renderCreative(
         size,
         footer: project.name,
         badge: labelFor(item),
+        logoUrl: palette.logoUrl,
       }),
       alt_text: item.hook,
     }),
@@ -151,15 +169,21 @@ function guessMime(url: string): string {
 function findScreenForItem(item: ContentItem, analysis: ProductAnalysis) {
   const ref = item.video_plan?.scenes.find((s) => s.screen_reference)?.screen_reference;
   if (ref) {
-    const hit = analysis.screens.find((s) => s.name === ref);
+    const hit = analysis.screens.find((s) => s.name === ref && s.image_url);
     if (hit) return hit;
   }
   const text = `${item.hook} ${item.caption}`.toLowerCase();
   return (
     analysis.screens.find((s) => s.image_url && text.includes(s.name.toLowerCase())) ??
-    (isVideo(item.format) ? analysis.screens.find((s) => s.image_url) : null) ??
+    // Prefer a real product visual whenever one exists — Instagram feed posts
+    // that only show a text card never look like the app.
+    firstScreenWithImage(analysis) ??
     null
   );
+}
+
+function firstScreenWithImage(analysis: ProductAnalysis) {
+  return analysis.screens.find((s) => s.image_url) ?? null;
 }
 
 async function save(
@@ -300,8 +324,9 @@ export function hookCard(opts: {
   size: { w: number; h: number };
   footer: string;
   badge: string;
+  logoUrl?: string | null;
 }): string {
-  const { hook, cta, palette, size, footer, badge } = opts;
+  const { hook, cta, palette, size, footer, badge, logoUrl } = opts;
   const id = 'h';
   const pad = Math.round(size.w * 0.09);
   // Larger type for short hooks, smaller for long ones.
@@ -311,6 +336,7 @@ export function hookCard(opts: {
   const lineHeight = fontSize * 1.08;
   const blockHeight = lines.length * lineHeight;
   const startY = size.h / 2 - blockHeight / 2 + fontSize * 0.78;
+  const logo = logoMark(logoUrl ?? palette.logoUrl, size, pad);
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size.w} ${size.h}" width="${size.w}" height="${size.h}">
 ${baseDefs(palette, id)}
@@ -318,6 +344,7 @@ ${baseDefs(palette, id)}
 <rect width="${size.w}" height="${size.h}" fill="url(#grid-${id})"/>
 <rect width="${size.w}" height="${size.h}" fill="url(#glow-${id})"/>
 <rect x="0" y="0" width="${Math.round(size.w * 0.018)}" height="${size.h}" fill="${palette.accent}"/>
+${logo}
 <g font-family="${escAttr(palette.bodyFont)}">
   <text x="${pad}" y="${pad + 30}" font-size="${Math.round(size.w * 0.028)}" font-weight="700"
         letter-spacing="4" fill="${palette.accent}">${esc(badge)}</text>
@@ -344,8 +371,9 @@ export function slideCard(opts: {
   palette: Palette;
   size: { w: number; h: number };
   footer: string;
+  logoUrl?: string | null;
 }): string {
-  const { headline, body, index, total, palette, size, footer } = opts;
+  const { headline, body, index, total, palette, size, footer, logoUrl } = opts;
   const id = `s${index}`;
   const pad = Math.round(size.w * 0.085);
   const isCover = index === 0;
@@ -356,12 +384,14 @@ export function slideCard(opts: {
 
   const headStart = pad + headSize * 1.5;
   const bodyStart = headStart + headLines.length * headSize * 1.1 + bodySize * 1.8;
+  const logo = isCover ? logoMark(logoUrl ?? palette.logoUrl, size, pad) : '';
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size.w} ${size.h}" width="${size.w}" height="${size.h}">
 ${baseDefs(palette, id)}
 <rect width="${size.w}" height="${size.h}" fill="${palette.bg}"/>
 <rect width="${size.w}" height="${size.h}" fill="url(#grid-${id})"/>
 ${isCover ? `<rect width="${size.w}" height="${size.h}" fill="url(#glow-${id})"/>` : ''}
+${logo}
 <g font-family="${escAttr(palette.bodyFont)}">
   <text x="${pad}" y="${pad + 24}" font-size="${Math.round(size.w * 0.026)}" font-weight="700"
         letter-spacing="4" fill="${palette.accent}">${index + 1} / ${total}</text>
@@ -383,6 +413,21 @@ ${bodyLines
 ${index === total - 1 ? `  <text x="${pad}" y="${size.h - pad - 18}" font-size="${Math.round(size.w * 0.03)}" font-weight="700" fill="${palette.accent}">→</text>` : ''}
 </g>
 </svg>`;
+}
+
+/**
+ * The product's own mark, top-right, when discovery found one.
+ *
+ * Only http(s) URLs are accepted — a card must never pull an arbitrary scheme.
+ * Rasterisation may skip remote images on some hosts; the brand colour bar and
+ * type still carry the identity when the mark cannot be drawn.
+ */
+function logoMark(logoUrl: string | null | undefined, size: { w: number; h: number }, pad: number): string {
+  if (!logoUrl || !/^https?:\/\//i.test(logoUrl.trim())) return '';
+  const side = Math.round(size.w * 0.11);
+  const x = size.w - pad - side;
+  const y = pad;
+  return `<image href="${escAttr(logoUrl.trim())}" x="${x}" y="${y}" width="${side}" height="${side}" preserveAspectRatio="xMidYMid meet"/>`;
 }
 
 /** Data URI form, for previewing an asset without a storage round-trip. */
