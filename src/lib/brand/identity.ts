@@ -251,9 +251,9 @@ export function lockFields(
 export function identityGaps(brand: BrandProfile | null): string[] {
   if (!brand) return ['No brand profile yet'];
   const gaps: string[] = [];
-  if (!brand.primary_color) gaps.push('No brand colour was found in the repository');
-  if (!brand.heading_font && !brand.body_font) gaps.push('No typeface was found in the repository');
-  if (!brand.logo_url) gaps.push('No logo was found in the repository');
+  if (!brand.primary_color) gaps.push('No brand colour was found in the repository or website');
+  if (!brand.heading_font && !brand.body_font) gaps.push('No typeface was found in the repository or website');
+  if (!brand.logo_url) gaps.push('No logo was found in the repository or website');
   return gaps;
 }
 

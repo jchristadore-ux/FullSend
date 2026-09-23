@@ -109,6 +109,15 @@ describe('website product analysis entry path', () => {
         truncated: false,
       },
       screens: [],
+      identity: {
+        evidence: {
+          style_files: [],
+          color_tokens: [],
+          font_families: [],
+          logo_candidates: [],
+          unresolved: ['primary_color', 'heading_font', 'body_font', 'logo_url', 'brand_name'],
+        },
+      },
     };
 
     const result = await analyzeWebsiteProduct(ctx.scope, project, 'https://acme.example', {
@@ -120,6 +129,10 @@ describe('website product analysis entry path', () => {
     expect(result.analysis.one_liner.length).toBeGreaterThan(5);
     expect(result.analysis.features.length).toBeGreaterThan(0);
     expect((result.analysis.raw_signals as { source?: string }).source).toBe('website');
+    expect(
+      (result.analysis.raw_signals as { brand_identity?: { evidence?: unknown } }).brand_identity
+        ?.evidence,
+    ).toBeTruthy();
 
     const saved = await db().findOne(ctx.scope, 'website_sources', {
       where: { project_id: project.id },

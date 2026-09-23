@@ -565,6 +565,53 @@ describe('brand-specific creative', () => {
     expect(svg).toContain('#123456');
     expect(svg).toContain('Fraunces');
   });
+
+  it('attaches a product screenshot to a carousel when the analysis has one', async () => {
+    const ctx = await setupContext();
+    const project = await createProject(ctx.scope, ctx.user.id, { name: 'PlayPal' });
+    const brand = await brandFor(ctx, project, {
+      primary_color: '#0e2b20',
+      background_color: '#f7f4ef',
+      text_color: '#1a1a1a',
+      logo_url: 'https://cdn.example/logo.png',
+    });
+    const analysis = await analysisFor(ctx, project);
+    await db().update(ctx.scope, 'product_analysis', analysis.id, {
+      screens: [
+        {
+          name: 'Home',
+          route: '/',
+          purpose: 'Landing',
+          key_elements: ['score'],
+          workflow: null,
+          image_url: 'https://cdn.example/home.png',
+          source_file: 'public/home.png',
+        },
+      ],
+    });
+    const refreshed = await db().get(ctx.scope, 'product_analysis', analysis.id);
+    const item = await itemFor(ctx, project, {
+      format: 'carousel',
+      slides: [
+        { headline: 'One', body: 'First' },
+        { headline: 'Two', body: 'Second' },
+      ],
+    });
+
+    const outcome = await materializeCreative(ctx.scope, {
+      project,
+      item,
+      brand,
+      analysis: refreshed!,
+    });
+
+    expect(outcome.failed).toBe(false);
+    expect(outcome.assets.some((a) => a.source === 'repo_screenshot')).toBe(true);
+    expect(outcome.assets.some((a) => a.url === 'https://cdn.example/home.png')).toBe(true);
+    const cover = outcome.assets.find((a) => a.source === 'svg_render');
+    expect(cover?.svg).toContain('#0e2b20');
+    expect(cover?.svg).toContain('https://cdn.example/logo.png');
+  });
 });
 
 /* ── Media that a platform could not fetch ──────────────────────────────── */
