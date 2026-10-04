@@ -10,6 +10,11 @@
 import type { IngestEventType, IngestFacts } from './schema';
 
 export const INGEST_HASHTAGS = ['#golf', '#handicap', '#TheBrovisional'];
+/**
+ * Marketing call to action. Instagram captions cannot carry a clickable link,
+ * so it points at the profile link ("link in bio") and names the address.
+ */
+export const MARKETING_CTA = 'Track your crew’s handicaps on The Brovisional — link in bio (brovisional.vercel.app).';
 const CAPTION_MAX = 2200;
 
 function fmt(n: number | undefined, digits = 1): string | null {
@@ -34,6 +39,8 @@ function names(facts: IngestFacts): string | null {
 }
 
 export function factsLines(eventType: IngestEventType, facts: IngestFacts): string[] {
+  // Marketing posts carry no people data; anything in facts is ignored.
+  if (eventType === 'marketing') return [];
   const who = names(facts);
   const score = facts.score !== undefined ? String(facts.score) : null;
   const diff = fmt(facts.differential);
@@ -90,15 +97,24 @@ export function buildIngestCaption(input: {
 }): BuiltCaption {
   const hint = input.captionHint.trim();
   const lines = factsLines(input.eventType, input.facts);
-  const body = [hint, lines.join('\n')].filter(Boolean).join('\n\n');
+  const cta =
+    input.eventType === 'marketing' && !/link in bio/i.test(hint) ? MARKETING_CTA : '';
+  const body = [hint, lines.join('\n'), cta].filter(Boolean).join('\n\n');
   const fallback =
-    input.eventType === 'weekly_leaderboard'
+    input.eventType === 'marketing'
+      ? 'Golf is better with a handicap.'
+      : input.eventType === 'weekly_leaderboard'
       ? 'The weekly leaderboard is in.'
       : input.eventType === 'handicap_drop'
         ? 'Handicap on the move.'
         : 'Round posted.';
   const caption = (body || fallback).slice(0, CAPTION_MAX - 80);
-  const firstLine = (hint || lines[0] || fallback).split('\n')[0]!.trim();
+  // The hook is the first line that says something (QC blocks a hook under 5 chars).
+  const firstLine =
+    [hint, lines[0] ?? '']
+      .flatMap((t) => t.split('\n'))
+      .map((l) => l.trim())
+      .find((l) => l.length >= 5) ?? fallback;
   const hook = firstLine.length > 120 ? `${firstLine.slice(0, 117)}…` : firstLine;
   return { hook, caption, hashtags: [...INGEST_HASHTAGS] };
 }

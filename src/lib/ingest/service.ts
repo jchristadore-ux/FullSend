@@ -25,7 +25,7 @@ import type { ContentItem, CreativeAsset, Project, ScheduledPost } from '../type
 import { buildIngestCaption } from './caption';
 import { IngestError } from './errors';
 import { fetchIngestImage, normalizeIngestImage } from './image';
-import type { IngestPost } from './schema';
+import { EMPTY_FACTS, type IngestPost } from './schema';
 
 const log = logger('ingest');
 
@@ -204,7 +204,7 @@ export async function ingestPost(payload: IngestPost, deps: IngestDeps = default
   const copy = buildIngestCaption({
     eventType: payload.event_type,
     captionHint: payload.caption_hint,
-    facts: payload.facts,
+    facts: payload.facts ?? EMPTY_FACTS,
   });
 
   if (previous) {

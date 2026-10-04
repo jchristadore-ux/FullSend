@@ -82,6 +82,22 @@ function payload(over: Record<string, unknown> = {}) {
   };
 }
 
+
+function marketing(day: string, half: 'am' | 'pm', over: Record<string, unknown> = {}) {
+  const base: Record<string, unknown> = {
+    project: 'brovisional',
+    event_type: 'marketing',
+    idempotency_key: `brovisional:marketing:${day}:${half}`,
+    image_url: 'https://cdn.brovisional.test/card-1.png',
+    alt_text: 'The Brovisional app showing a group handicap leaderboard.',
+    caption_hint: 'Your Saturday group deserves real handicaps. Post rounds, watch the index move.',
+    brand: { primary: '#0B6E4F', accent: '#F2C14E' },
+    group_id: `marketing-${day}`,
+    ...over,
+  };
+  return base;
+}
+
 function signedPost(body: unknown, opts: { secret?: string; ts?: number; raw?: string; ip?: string } = {}) {
   const raw = opts.raw ?? JSON.stringify(body);
   const ts = String(opts.ts ?? Math.floor(Date.now() / 1000));
@@ -185,6 +201,28 @@ describe('ingest caption', () => {
     const { caption } = buildIngestCaption({ eventType: 'weekly_leaderboard', captionHint: '', facts });
     expect(caption.indexOf('1. Jo')).toBeLessThan(caption.indexOf('2. Sam'));
     expect(caption).toContain('1. Jo — 8.1 (−1.0)');
+  });
+
+  it('builds a marketing caption from caption_hint plus a link-in-bio CTA, ignoring facts', () => {
+    const facts = factsSchema.parse({ players: [{ display_name: 'Mike R.' }], course: 'Pine Hollow' });
+    const built = buildIngestCaption({
+      eventType: 'marketing',
+      captionHint: 'Your Saturday group deserves real handicaps.',
+      facts,
+    });
+    expect(built.caption).toContain('Your Saturday group deserves real handicaps.');
+    expect(built.caption).toContain('link in bio (brovisional.vercel.app)');
+    expect(built.caption).not.toContain('Mike R.');
+    expect(built.caption).not.toContain('Pine Hollow');
+    expect(built.hashtags).toEqual(['#golf', '#handicap', '#TheBrovisional']);
+    // A hint that already says "link in bio" is not given a second CTA.
+    const own = buildIngestCaption({ eventType: 'marketing', captionHint: 'Join the crew, link in bio.', facts });
+    expect(own.caption.match(/link in bio/gi)).toHaveLength(1);
+  });
+
+  it('never uses a too-short first line as the hook', () => {
+    const built = buildIngestCaption({ eventType: 'marketing', captionHint: '⛳\nTee times are better with a real index.', facts: factsSchema.parse({}) });
+    expect(built.hook).toBe('Tee times are better with a real index.');
   });
 });
 
@@ -419,6 +457,108 @@ describe('ingest API', () => {
     const malformed = await handleIngestDelete(signedDelete('nope'), 'nope', deps());
     expect(malformed.status).toBe(400);
     expect(await items()).toHaveLength(1);
+  });
+
+
+  it('accepts a marketing post with no facts and schedules it at exactly scheduled_for', async () => {
+    await db().update(sys, 'projects', project.id, { ingest_auto_publish: true });
+    const at = '2030-05-04T11:30:00-04:00';
+    const res = await handleIngestPost(signedPost(marketing('2030-05-04', 'am', { scheduled_for: at })), deps());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('scheduled');
+    const item = await db().get(sys, 'content_items', body.post_id);
+    expect(item!.dedup_hash).toBe('ingest:brovisional:marketing:2030-05-04:am');
+    expect(item!.caption).toContain('link in bio');
+    expect(item!.qc!.passed).toBe(true);
+    const sp = await db().findOne(sys, 'scheduled_posts', { where: { content_item_id: body.post_id } });
+    expect(sp!.scheduled_for).toBe('2030-05-04T15:30:00.000Z');
+  });
+
+  it('accepts facts: {} for marketing and requires caption_hint', async () => {
+    const ok = await handleIngestPost(signedPost(marketing('2030-05-04', 'pm', { facts: {} })), deps());
+    expect(ok.status).toBe(200);
+    expect((await ok.json()).status).toBe('draft');
+
+    const noHint = await handleIngestPost(signedPost(marketing('2030-05-05', 'am', { caption_hint: '' })), deps());
+    expect(noHint.status).toBe(400);
+    expect((await noHint.json()).details[0].path).toBe('caption_hint');
+
+    const noImage = marketing('2030-05-05', 'am');
+    delete noImage.image_url;
+    expect((await handleIngestPost(signedPost(noImage), deps())).status).toBe(400);
+
+    // Non-marketing events still need facts.
+    const noFacts = payload();
+    delete (noFacts as Record<string, unknown>).facts;
+    const r = await handleIngestPost(signedPost(noFacts), deps());
+    expect(r.status).toBe(400);
+    expect((await r.json()).details[0].path).toBe('facts');
+
+    // The prefix rule still applies.
+    const wrong = await handleIngestPost(
+      signedPost(marketing('2030-05-05', 'am', { idempotency_key: 'brovisional:round_result:2030-05-05:am' })),
+      deps(),
+    );
+    expect(wrong.status).toBe(400);
+  });
+
+  it('schedules days of near-identical twice-daily promos without QC or dedup holding them', async () => {
+    await db().update(sys, 'projects', project.id, { ingest_auto_publish: true });
+    const statuses: string[] = [];
+    for (let d = 1; d <= 4; d++) {
+      const day = `2030-06-0${d}`;
+      for (const [half, time] of [['am', '11:30'], ['pm', '19:30']] as const) {
+        const res = await handleIngestPost(
+          signedPost(marketing(day, half, { scheduled_for: `${day}T${time}:00-04:00` })),
+          deps(),
+        );
+        statuses.push((await res.json()).status);
+      }
+    }
+    expect(statuses).toEqual(Array(8).fill('scheduled'));
+    expect(await db().count(sys, 'scheduled_posts', { where: { project_id: project.id } })).toBe(8);
+  }, 90_000);
+
+  it('withdraws a marketing post by its date/slot key', async () => {
+    const body = await (await handleIngestPost(signedPost(marketing('2030-05-04', 'am')), deps())).json();
+    const key = 'brovisional:marketing:2030-05-04:am';
+    const res = await handleIngestDelete(signedDelete(key), encodeURIComponent(key), deps());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'withdrawn', post_id: body.post_id });
+  });
+
+  it('holds auto-publish to draft when the plan allowance is used up, but not for an operator', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_test_ingest';
+    try {
+      await db().update(sys, 'projects', project.id, { ingest_auto_publish: true });
+      // Free plan: 10 posts/month, all already used this month.
+      for (let i = 0; i < 10; i++) {
+        await db().insert(sys, 'published_posts', {
+          id: crypto.randomUUID(),
+          project_id: project.id,
+          content_item_id: crypto.randomUUID(),
+          scheduled_post_id: null,
+          social_account_id: crypto.randomUUID(),
+          platform: 'instagram',
+          external_id: `ext-${i}`,
+          permalink: null,
+          published_at: nowIso(),
+          platform_response: {},
+        });
+      }
+      const at = '2030-05-04T11:30:00-04:00';
+      const held = await (await handleIngestPost(signedPost(marketing('2030-05-04', 'am', { scheduled_for: at })), deps())).json();
+      expect(held.status).toBe('draft');
+
+      // JD is in FULLSEND_ADMIN_EMAILS → operator, uncapped.
+      process.env.FULLSEND_ADMIN_EMAILS = ctx.user.email;
+      const ok = await (await handleIngestPost(signedPost(marketing('2030-05-04', 'pm', { scheduled_for: at })), deps())).json();
+      expect(ok.status).toBe('scheduled');
+    } finally {
+      delete process.env.STRIPE_SECRET_KEY;
+      delete process.env.FULLSEND_ADMIN_EMAILS;
+    }
   });
 
   it('rate-limits unauthenticated floods with 429', async () => {
