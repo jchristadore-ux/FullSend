@@ -5,7 +5,7 @@ import { getRepository, getSettings } from '@/lib/db/repo';
 import { aiSpend } from '@/lib/ai/client';
 import { PLANS } from '@/lib/billing/plans';
 import { loadAccess } from '@/lib/billing/enforce';
-import { capabilities } from '@/lib/env';
+import { capabilities, env } from '@/lib/env';
 import { SettingsView } from '@/components/app/SettingsView';
 
 export const dynamic = 'force-dynamic';
@@ -36,6 +36,7 @@ export default async function SettingsPage() {
       }}
       capabilities={capabilities()}
       userEmail={session.user.email}
+      ingestSource={env.ingest.brovisionalProjectId === project.id ? 'The Brovisional' : null}
     />
   );
 }

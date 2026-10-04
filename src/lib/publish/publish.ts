@@ -192,6 +192,7 @@ export async function publishScheduledPost(
       caption,
       format: content.format,
       mediaUrls: media.images,
+      altTexts: media.altTexts,
       videoUrl,
       coverUrl: media.cover,
       shareToFeed: true,

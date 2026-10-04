@@ -193,8 +193,9 @@ export async function publicUrlsFor(
   scope: TenantScope,
   projectId: Uuid,
   assetIds: Uuid[],
-): Promise<{ images: string[]; video: string | null; cover: string | null }> {
+): Promise<{ images: string[]; video: string | null; cover: string | null; altTexts: string[] }> {
   const images: string[] = [];
+  const altTexts: string[] = [];
   let video: string | null = null;
   let cover: string | null = null;
 
@@ -208,8 +209,27 @@ export async function publicUrlsFor(
     }
     const url = await ensurePublicUrl(scope, asset);
     if (asset.kind === 'thumbnail') cover = url;
-    else images.push(url);
+    else {
+      images.push(url);
+      /*
+       * Alt text is only sent for uploaded images (signed ingest supplies a
+       * human-written description). Generated cards keep their existing
+       * publish request unchanged.
+       */
+      altTexts.push(asset.source === 'upload' ? asset.alt_text : '');
+    }
   }
 
-  return { images, video, cover };
+  return { images, video, cover, altTexts };
+}
+
+/** Best-effort removal of a stored object (e.g. a withdrawn ingest image). */
+export async function removeStoredObject(path: string): Promise<void> {
+  if (!storageAvailable()) return;
+  try {
+    const { error } = await storageClient().storage.from(env.supabase.storageBucket).remove([path]);
+    if (error) log.warn('could not remove stored object', { path, error: error.message });
+  } catch (e) {
+    log.warn('could not remove stored object', { path, error: e instanceof Error ? e.message : String(e) });
+  }
 }

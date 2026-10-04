@@ -488,6 +488,8 @@ export class InstagramAdapter implements PlatformAdapter {
       const image = input.mediaUrls[0];
       this.requireMedia(image, 'an image URL', 'feed post');
       params.set('image_url', image!);
+      const alt = input.altTexts?.[0]?.trim();
+      if (alt) params.set('alt_text', alt.slice(0, 1000));
     }
 
     const container = await this.json<any>(this.graph(`/${igId}/media`), {
@@ -509,15 +511,19 @@ export class InstagramAdapter implements PlatformAdapter {
       });
     }
     const children: string[] = [];
-    for (const url of input.mediaUrls.slice(0, 10)) {
+    const urls = input.mediaUrls.slice(0, 10);
+    for (let i = 0; i < urls.length; i++) {
+      const body = new URLSearchParams({
+        image_url: urls[i]!,
+        is_carousel_item: 'true',
+        access_token: token,
+      });
+      const alt = input.altTexts?.[i]?.trim();
+      if (alt) body.set('alt_text', alt.slice(0, 1000));
       const child = await this.json<any>(this.graph(`/${igId}/media`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          image_url: url,
-          is_carousel_item: 'true',
-          access_token: token,
-        }),
+        body,
       });
       children.push(String(child.id));
     }

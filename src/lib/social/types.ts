@@ -31,6 +31,12 @@ export interface PublishInput {
   format: ContentFormat;
   /** Publicly reachable media. Video for reels/short video, images otherwise. */
   mediaUrls: string[];
+  /**
+   * Alt text per entry of `mediaUrls`, same order. Instagram accepts it on
+   * single images and carousel children only (not Reels or Stories). Empty
+   * strings are omitted.
+   */
+  altTexts?: string[];
   videoUrl?: string | null;
   coverUrl?: string | null;
   /** TikTok requires an explicit privacy level chosen from creator_info. */
