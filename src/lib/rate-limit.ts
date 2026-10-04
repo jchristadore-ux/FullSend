@@ -39,6 +39,10 @@ export const LIMITS = {
    * one account; see src/lib/ai/tenant-limit.ts for the env override.
    */
   aiTenant: { limit: 40, windowMs: 60 * 60 * 1000 },
+  /** Signed ingest, before the signature is checked — per client IP. */
+  ingestUnauthenticated: { limit: 60, windowMs: 60 * 1000 },
+  /** Signed ingest, after the signature is checked — per source project. */
+  ingest: { limit: 120, windowMs: 60 * 1000 },
 } as const satisfies Record<string, LimitRule>;
 
 export function check(key: string, rule: LimitRule, now = Date.now()): void {

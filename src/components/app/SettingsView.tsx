@@ -32,6 +32,7 @@ export function SettingsView({
   plan,
   capabilities,
   userEmail,
+  ingestSource = null,
 }: {
   project: Project;
   settings: Settings | null;
@@ -40,6 +41,8 @@ export function SettingsView({
   plan: { tier: string; name: string; billingEnabled: boolean };
   capabilities: Capabilities;
   userEmail: string;
+  /** Name of the app that pushes posts into this project via signed ingest, if any. */
+  ingestSource?: string | null;
 }) {
   const router = useRouter();
   const [mode, setMode] = useState<AutopilotMode>(project.autopilot_mode);
@@ -48,6 +51,7 @@ export function SettingsView({
     settings?.require_approval_for_promotion ?? true,
   );
   const [trends, setTrends] = useState(settings?.trend_participation ?? true);
+  const [ingestAuto, setIngestAuto] = useState(project.ingest_auto_publish === true);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +90,7 @@ export function SettingsView({
           daily_post_cap: dailyCap,
           require_approval_for_promotion: requireApproval,
           trend_participation: trends,
+          ...(ingestSource ? { ingest_auto_publish: ingestAuto } : {}),
         }),
       });
       const json = await res.json();
@@ -117,6 +122,9 @@ export function SettingsView({
           {repository.owner}/{repository.name} ↗
         </a>
       )}
+      <p className="mt-1 font-mono text-[11px] text-dimmer">
+        Project ID: <span className="select-all">{project.id}</span>
+      </p>
 
       {/* Autopilot mode. */}
       <section className="mt-8">
@@ -187,6 +195,15 @@ export function SettingsView({
             title="Participate in trends"
             body="FullSend only joins formats your product can genuinely take part in."
           />
+
+          {ingestSource && (
+            <Toggle
+              checked={ingestAuto}
+              onChange={setIngestAuto}
+              title={`Auto-publish posts from ${ingestSource}`}
+              body={`Off: every card ${ingestSource} sends waits for your approval in the Send Center. On: it is scheduled straight away (at the time it asks for, or the next open slot).`}
+            />
+          )}
         </div>
       </section>
 

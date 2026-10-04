@@ -15,6 +15,7 @@ export const PATCH = projectRoute(
     const projectPatch: Record<string, unknown> = {};
     if (body.autopilot_mode) projectPatch.autopilot_mode = body.autopilot_mode;
     if (body.timezone) projectPatch.timezone = body.timezone;
+    if (body.ingest_auto_publish !== undefined) projectPatch.ingest_auto_publish = body.ingest_auto_publish;
 
     const updated = Object.keys(projectPatch).length
       ? await updateProject(session.scope, project.id, projectPatch)

@@ -94,7 +94,7 @@ Use this as the short checklist; details and caveats live in `docs/TRANSFER.md`.
 ### Before listing (owner)
 
 - [ ] Confirm production uses **Live** Stripe keys/prices (not test) and webhook → `/api/billing/webhook`
-- [ ] Confirm Supabase has migrations **0001–0007** applied (website source = `0007`)
+- [ ] Confirm Supabase has migrations **0001–0008** applied (website source = `0007`, ingest auto-publish = `0008`)
 - [ ] Confirm Instagram connect + publish path works; do **not** claim TikTok as live
 - [ ] Set `FULLSEND_ADMIN_EMAILS` to current operator(s); remove stale addresses
 - [ ] Confirm `CRON_SECRET` matches Actions `FULLSEND_CRON_SECRET` (or your external cron bearer)
@@ -107,7 +107,7 @@ Use this as the short checklist; details and caveats live in `docs/TRANSFER.md`.
 | --- | --- | --- |
 | 1 | **GitHub** | Transfer repo admin; rotate Actions secrets `FULLSEND_URL`, `FULLSEND_CRON_SECRET` |
 | 2 | **Vercel** | Transfer project; copy env from private runbook; set `NEXT_PUBLIC_APP_URL`; redeploy |
-| 3 | **Supabase** | Transfer project; verify migrations through **0007**; rotate keys; Auth URLs |
+| 3 | **Supabase** | Transfer project; verify migrations through **0008**; rotate keys; Auth URLs |
 | 4 | **Stripe** | Transfer **Live** account or recreate Live catalog + webhook; update price IDs |
 | 5 | **Meta app** | Transfer Business ownership; update Instagram redirect URI to new domain |
 | 6 | **Domain** | DNS / Vercel domain in lockstep with app URL + OAuth callbacks |
@@ -130,8 +130,110 @@ Financials, ARR/MRR, user counts, customer lists, APA — **owner-side data room
 
 ---
 
+## Brovisional → FullSend (Instagram posts from The Brovisional)
+
+The Brovisional sends its finished Instagram cards to FullSend. FullSend keeps
+them as posts for you to approve (or posts them on its own, if you switch that
+on) and publishes them to a **separate Instagram account for The
+Brovisional**. Technical details: `docs/INGEST.md`.
+
+FullSend connects Instagram with **"Instagram Login"** (the default in the
+code). That means **no Facebook Page is needed**.
+
+### 1. Make the Brovisional Instagram account a professional account
+
+1. On your phone, sign in to (or create) the Instagram account you want The
+   Brovisional to post to.
+2. Profile → ☰ menu → **Settings and activity** → **Account type and tools** →
+   **Switch to professional account**.
+3. Pick **Business** (recommended; Creator also works with Instagram Login).
+   Choose a category like "Sports" and finish the steps.
+4. You do **not** need to link a Facebook Page.
+
+### 2. Let that account use the FullSend Meta app (needed until Meta approves the app)
+
+Meta has not approved FullSend's app yet, so only accounts you add as testers
+can connect.
+
+1. On a computer, open [Meta for Developers](https://developers.facebook.com/apps/)
+   and open the **FullSend** app.
+2. Left menu → **App roles** → **Roles** → **Add People** → choose
+   **Instagram Tester** → type the Brovisional Instagram username → send.
+3. Accept the invite on Instagram: in a web browser go to instagram.com
+   (signed in as the Brovisional account) → **Settings** → **Apps and
+   websites** (Website permissions) → **Tester invites** → **Accept**.
+
+### 3. Create the Brovisional project in FullSend (if you have not already)
+
+1. Open https://full-send-lyart.vercel.app/app and press **+ Add app**.
+2. Add The Brovisional (its GitHub repo `jchristadore-ux/brovisional`, or its
+   website) and finish the setup.
+3. With The Brovisional selected in the app switcher, open **Settings**. Under
+   the project name you'll see **Project ID** — copy it.
+
+### 4. Tell FullSend which project the posts go to
+
+In Vercel → the FullSend project → **Settings → Environment Variables**
+(Production), add:
+
+| Name | Value |
+| --- | --- |
+| `BROVISIONAL_PROJECT_ID` | The Project ID you copied in step 3 |
+
+`BROVISIONAL_INGEST_SECRET` is added by the Brovisional side — you don't need
+to create it. Then **Redeploy** (Deployments → ⋯ → Redeploy) so the new values
+take effect.
+
+### 5. Apply database update 0008 (adds the auto-publish switch)
+
+Easiest: sign in and open **https://full-send-lyart.vercel.app/admin** (Control
+Room) → **Schema** card → press **Apply 1 pending**.
+
+If that card says FullSend can't reach the database directly: open Supabase →
+**SQL Editor** → **New query**, paste the contents of
+`supabase/migrations/0008_ingest_auto_publish.sql`, press **Run**, then in the
+Control Room press **Already ran these by hand**.
+
+Until this is done, posts still arrive — they just always wait for your
+approval.
+
+### 6. Connect the Brovisional Instagram account in FullSend
+
+1. In FullSend, make sure **The Brovisional** is the selected app (top
+   switcher). This matters: each app has its own Instagram account.
+2. Open **Accounts** → **CONNECT INSTAGRAM**.
+3. Instagram opens. Make sure it is signed in as the **Brovisional** account
+   (if it shows your other account, use "Not you?" / switch accounts), then
+   allow the permissions.
+4. You land back on Accounts with the Brovisional username shown as connected.
+
+### 7. Choose: approve each post, or auto-publish
+
+In FullSend with The Brovisional selected → **Settings** → **Publishing rules**
+→ **Auto-publish posts from The Brovisional**:
+
+- **Off (default):** every card waits in the Send Center (Content → "Approval
+  required"). Open it, check it, press approve / send.
+- **On:** cards are scheduled straight away (at the time Brovisional asks for,
+  or the next open slot) and publish on their own.
+
+Press **SAVE SETTINGS**.
+
+### Checklist
+
+- [ ] Brovisional Instagram account is Business (or Creator)
+- [ ] It is an accepted **Instagram Tester** on the FullSend Meta app
+- [ ] Brovisional project exists in FullSend; `BROVISIONAL_PROJECT_ID` set in Vercel; redeployed
+- [ ] Brovisional side has set `BROVISIONAL_INGEST_SECRET` on both apps
+- [ ] Migration **0008** applied
+- [ ] Instagram connected under **The Brovisional** project (not FullSend's own)
+- [ ] Draft vs auto-publish chosen in Settings
+
+---
+
 ## Related docs
 
+- `docs/INGEST.md` — Brovisional → FullSend signed ingest contract
 - `docs/meta-app-review/` — full Meta submission package
 - `docs/TRANSFER.md` — full buyer transfer guide
 - `docs/ACQUIRE.md` — Acquire.com listing pointer

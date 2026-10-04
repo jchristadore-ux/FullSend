@@ -324,5 +324,7 @@ export const updateContentInput = z.object({
 });
 export const settingsInput = z.object({
   autopilot_mode: z.enum(['manual', 'hybrid', 'full_send']).optional(), timezone: z.string().max(60).optional(), daily_post_cap: z.number().int().min(1).max(10).optional(), require_approval_for_promotion: z.boolean().optional(), trend_participation: z.boolean().optional(), notify_email: z.boolean().optional(),
+  /** Migration 0008: auto-schedule posts that arrive through signed ingest. */
+  ingest_auto_publish: z.boolean().optional(),
   quiet_hours: z.object({ start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }).nullable().optional(),
 });

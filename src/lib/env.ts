@@ -215,6 +215,25 @@ export const env = {
     },
   },
 
+  /**
+   * Signed ingest from sibling apps (The Brovisional). Getters so a rotated
+   * secret is seen without a redeploy of this module's cached values.
+   * Never logged; see src/lib/ingest/signature.ts.
+   */
+  ingest: {
+    get brovisionalSecret() {
+      return opt('BROVISIONAL_INGEST_SECRET');
+    },
+    /** Still accepted during a rotation; unset once Brovisional has switched. */
+    get brovisionalSecretPrevious() {
+      return opt('BROVISIONAL_INGEST_SECRET_PREVIOUS');
+    },
+    /** The FullSend project (UUID) Brovisional posts land in. */
+    get brovisionalProjectId() {
+      return opt('BROVISIONAL_PROJECT_ID');
+    },
+  },
+
   aiTenant: {
     /** Max AI generateObject calls per tenant per hour. */
     get hourlyLimit() {
