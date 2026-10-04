@@ -55,7 +55,7 @@ await fetch('https://full-send-lyart.vercel.app/api/ingest/posts', {
 ```jsonc
 {
   "project": "brovisional",                         // only accepted value
-  "event_type": "round_result",                     // | "handicap_drop" | "weekly_leaderboard"
+  "event_type": "round_result",                     // | "handicap_drop" | "weekly_leaderboard" | "marketing"
   "idempotency_key": "brovisional:round_result:r_123", // must start with brovisional:<event_type>:
   "image_url": "https://…/card.png",                // public https, 1080x1350 PNG
   "alt_text": "Scorecard: Mike R. shot 78 at Pine Hollow.", // 1–1000 chars
@@ -79,8 +79,10 @@ await fetch('https://full-send-lyart.vercel.app/api/ingest/posts', {
 
 Validation (zod, `src/lib/ingest/schema.ts`):
 
-- `idempotency_key` matches `^brovisional:(round_result|handicap_drop|weekly_leaderboard):[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`
+- `idempotency_key` matches `^brovisional:(round_result|handicap_drop|weekly_leaderboard|marketing):[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`
   and its event segment must equal `event_type`.
+- `facts` is required for `round_result`, `handicap_drop` and
+  `weekly_leaderboard`; it may be omitted or `{}` for `marketing` (see below).
 - `image_url` and `brand.logo_url` must be `https://`. `brand.primary` /
   `brand.accent` are hex colours.
 - `facts` is a **closed** shape. Every field is optional (`players` defaults to
@@ -119,6 +121,50 @@ Validation (zod, `src/lib/ingest/schema.ts`):
      slot in the coming week, or now. Response `scheduled`. If quality control
      blocks it or the plan's post allowance is used up, it is held as a draft
      instead (response `draft`).
+
+### Marketing posts (`event_type: "marketing"`)
+
+Twice-daily promo cards for The Brovisional itself.
+
+```jsonc
+{
+  "project": "brovisional",
+  "event_type": "marketing",
+  "idempotency_key": "brovisional:marketing:2026-10-05:am",   // <YYYY-MM-DD>:<am|pm>
+  "image_url": "https://…/promo.png",                        // required, same image rules
+  "alt_text": "The Brovisional app showing a group leaderboard.",
+  "caption_hint": "Your Saturday group deserves real handicaps.", // required, ≥10 chars: this IS the copy
+  "brand": { "primary": "#0B6E4F", "accent": "#F2C14E" },
+  "scheduled_for": "2026-10-05T11:30:00-04:00",
+  "group_id": "marketing-2026-10-05"
+  // "facts" may be omitted or {} — and is ignored if sent
+}
+```
+
+- **Caption** = `caption_hint`, then
+  `Track your crew’s handicaps on The Brovisional — link in bio (brovisional.vercel.app).`
+  (skipped if the hint already says "link in bio"; Instagram captions can't
+  carry clickable links), then `#golf #handicap #TheBrovisional`. No names
+  are used, and any `facts` sent are ignored.
+- The **hook** is the first line of the hint that is at least 5 characters.
+- Marketing posts follow the same per-project **auto-publish** toggle. With it
+  on and `scheduled_for` set, the post is scheduled at **exactly** that
+  instant (a past time means now) and goes out on the next worker pass. Daily
+  caps and quiet hours apply only to FullSend choosing a slot, never to an
+  explicit `scheduled_for`.
+- **Quality control** runs as usual, but only a *block* finding holds a post
+  as a draft (claims like "#1"/"guaranteed", an empty caption, placeholders,
+  over-length). Warnings (e.g. an unqualified "free", "limited time") go
+  through. Ingested posts are **not** compared with recent posts, so a
+  near-identical promo every day is not held as a repeat; idempotency is by
+  key, not by caption similarity.
+- **Plan allowance:** auto-publish checks the project owner's monthly post
+  allowance. Operators (`FULLSEND_ADMIN_EMAILS` or `users.is_admin`) are
+  uncapped, so two a day is fine for JD. On a paid plan, Send (60/month) does
+  not cover 2×31 days; Full Send (1000) does. With billing off (no
+  `STRIPE_SECRET_KEY`) there is no cap.
+- `DELETE /api/ingest/posts/brovisional:marketing:2026-10-05:am` withdraws it
+  like any other post.
 
 ### Idempotency
 
