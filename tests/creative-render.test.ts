@@ -573,7 +573,7 @@ describe('brand-specific creative', () => {
       primary_color: '#0e2b20',
       background_color: '#f7f4ef',
       text_color: '#1a1a1a',
-      logo_url: 'https://cdn.example/logo.png',
+      logo_url: 'https://93.184.215.14/logo.png',
     });
     const analysis = await analysisFor(ctx, project);
     await db().update(ctx.scope, 'product_analysis', analysis.id, {
@@ -616,7 +616,7 @@ describe('brand-specific creative', () => {
       const cover = outcome.assets.find((a) => a.source === 'svg_render');
       expect(cover?.svg).toContain('#0e2b20');
       expect(cover?.svg).not.toContain('<image');
-      expect(cover?.svg).not.toContain('https://cdn.example/logo.png');
+      expect(cover?.svg).not.toContain('https://93.184.215.14/logo.png');
     } finally {
       globalThis.fetch = prev;
     }
@@ -629,7 +629,7 @@ describe('brand-specific creative', () => {
       primary_color: '#0e2b20',
       background_color: '#f7f4ef',
       text_color: '#1a1a1a',
-      logo_url: 'https://cdn.example/logo.png',
+      logo_url: 'https://93.184.215.14/logo.png',
     });
     const analysis = await analysisFor(ctx, project);
     const item = await itemFor(ctx, project);
@@ -651,7 +651,7 @@ describe('brand-specific creative', () => {
       const cover = outcome.assets.find((a) => a.source === 'svg_render');
       expect(cover?.svg).toContain('data:image/png;base64,');
       expect(cover?.svg).toContain('<image href="data:image/png');
-      expect(cover?.svg).not.toContain('https://cdn.example/logo.png');
+      expect(cover?.svg).not.toContain('https://93.184.215.14/logo.png');
       // Font-stack escaping must never rewrite the href.
       expect(cover?.svg).not.toMatch(/data:image\/png[^"]*, Inter/);
     } finally {
