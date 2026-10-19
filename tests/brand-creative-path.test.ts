@@ -163,6 +163,23 @@ describe('resolveLogoEmbed', () => {
     }
   });
 
+  it('refuses private/internal logo URLs and redirects to them (SSRF)', async () => {
+    const prev = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data' } });
+    }) as typeof fetch;
+    try {
+      await expect(resolveLogoEmbed('http://127.0.0.1/logo.png')).resolves.toBeNull();
+      expect(calls).toBe(0);
+      await expect(resolveLogoEmbed('https://cdn.example/redirect.png')).resolves.toBeNull();
+      expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = prev;
+    }
+  });
+
   it('omits the mark cleanly when the remote fetch fails', async () => {
     const prev = globalThis.fetch;
     globalThis.fetch = (async () => new Response('nope', { status: 404 })) as typeof fetch;
