@@ -9,6 +9,7 @@
  * visual instead of a generated card. When an image-generation provider is
  * configured it can supplant this; until then this is what publishes.
  */
+import { assertSafePublicUrl } from '../website/ssrf';
 import 'server-only';
 import { type TenantScope } from '../db';
 import { db } from '../db/repo';
@@ -446,11 +447,28 @@ export async function resolveLogoEmbed(
   if (!/^https?:\/\//i.test(url)) return null;
 
   try {
-    const res = await fetch(url, {
-      redirect: 'follow',
-      signal: AbortSignal.timeout(LOGO_FETCH_MS),
-      headers: { Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8' },
-    });
+    // The logo URL comes from a parsed website, so it gets the same SSRF guard
+    // as website ingestion: public hosts only, every redirect re-checked.
+    let current = await assertSafePublicUrl(url);
+    let res: Response | null = null;
+    for (let hop = 0; hop <= 3; hop++) {
+      const r = await fetch(current, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(LOGO_FETCH_MS),
+        headers: { Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8' },
+      });
+      if (r.status >= 300 && r.status < 400) {
+        const location = r.headers.get('location');
+        if (!location) return null;
+        current = await assertSafePublicUrl(new URL(location, current).href);
+        continue;
+      }
+      res = r;
+      break;
+    }
+    if (!res) return null;
+    const declared = Number(res.headers.get('content-length') ?? '0');
+    if (declared > MAX_LOGO_EMBED_BYTES) return null;
     if (!res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.byteLength === 0 || buf.byteLength > MAX_LOGO_EMBED_BYTES) return null;

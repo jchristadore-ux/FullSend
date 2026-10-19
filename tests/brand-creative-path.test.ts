@@ -109,7 +109,7 @@ describe('brand identity → render palette → card', () => {
       text_color: '#111111',
       heading_font: 'Fraunces',
       body_font: 'Inter',
-      logo_url: 'https://cdn.example/logo.png',
+      logo_url: 'https://93.184.215.14/logo.png',
     });
     const embed = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     const cover = slideCard({
@@ -124,7 +124,7 @@ describe('brand identity → render palette → card', () => {
     });
     expect(cover).toContain('data:image/png;base64,');
     expect(cover).toContain('<image href="data:image/png');
-    expect(cover).not.toContain('https://cdn.example/logo.png');
+    expect(cover).not.toContain('https://93.184.215.14/logo.png');
   });
 });
 
@@ -155,9 +155,26 @@ describe('resolveLogoEmbed', () => {
     globalThis.fetch = (async () =>
       new Response(PNG_BYTES, { status: 200, headers: { 'content-type': 'image/png' } })) as typeof fetch;
     try {
-      const embed = await resolveLogoEmbed('https://cdn.example/logo.png');
+      const embed = await resolveLogoEmbed('https://93.184.215.14/logo.png');
       expect(embed).toMatch(/^data:image\/png;base64,/);
       expect(embed!.length).toBeGreaterThan('data:image/png;base64,'.length);
+    } finally {
+      globalThis.fetch = prev;
+    }
+  });
+
+  it('refuses private/internal logo URLs and redirects to them (SSRF)', async () => {
+    const prev = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data' } });
+    }) as typeof fetch;
+    try {
+      await expect(resolveLogoEmbed('http://127.0.0.1/logo.png')).resolves.toBeNull();
+      expect(calls).toBe(0);
+      await expect(resolveLogoEmbed('https://93.184.215.14/redirect.png')).resolves.toBeNull();
+      expect(calls).toBe(1);
     } finally {
       globalThis.fetch = prev;
     }
@@ -167,7 +184,7 @@ describe('resolveLogoEmbed', () => {
     const prev = globalThis.fetch;
     globalThis.fetch = (async () => new Response('nope', { status: 404 })) as typeof fetch;
     try {
-      await expect(resolveLogoEmbed('https://cdn.example/missing.png')).resolves.toBeNull();
+      await expect(resolveLogoEmbed('https://93.184.215.14/missing.png')).resolves.toBeNull();
     } finally {
       globalThis.fetch = prev;
     }
