@@ -20,7 +20,21 @@ export type IngestEventType = (typeof INGEST_EVENT_TYPES)[number];
 export const IDEMPOTENCY_KEY_RE =
   /^brovisional:(round_result|handicap_drop|weekly_leaderboard|marketing):[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 
-const displayName = z.string().trim().min(1).max(80);
+/**
+ * A display name exactly as the sender wrote it — "First L." or a nickname
+ * like "Man of Birds". Case and inner spaces are preserved; runs of whitespace
+ * collapse to one space and control characters are rejected.
+ */
+const displayName = z
+  .string()
+  .transform((v) => v.replace(/\s+/g, ' ').trim())
+  .pipe(
+    z
+      .string()
+      .min(1)
+      .max(80)
+      .refine((v) => !/[\u0000-\u001F\u007F]/.test(v), 'must not contain control characters'),
+  );
 const num = z.number().finite();
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{3,8}$/, 'must be a hex colour like #0B6E4F');
 const httpsUrl = z
