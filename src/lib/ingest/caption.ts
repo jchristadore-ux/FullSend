@@ -31,6 +31,24 @@ function signed(n: number | undefined): string | null {
   return '±0.0';
 }
 
+/**
+ * "a" or "an" before a number, chosen by how it is spoken: an 8, an 11, an 18,
+ * an 80-something, an 800-something, an 8,000… Everything else takes "a".
+ */
+export function articleForNumber(n: number | string): 'a' | 'an' {
+  const s = String(n).trim().replace(/^[+−-]/, '');
+  const intPart = s.split('.')[0]!.replace(/,/g, '');
+  if (!/^\d+$/.test(intPart)) return 'a';
+  const digits = intPart.replace(/^0+(?=\d)/, '');
+  // The leading thousands group is what is said first ("eighteen thousand").
+  const leadLen = digits.length % 3 || 3;
+  const lead = Number(digits.slice(0, leadLen));
+  if (lead === 8 || lead === 11 || lead === 18) return 'an';
+  if (lead >= 80 && lead <= 89) return 'an';
+  if (lead >= 800 && lead <= 899) return 'an';
+  return 'a';
+}
+
 function names(facts: IngestFacts): string | null {
   const list = facts.players.map((p) => p.display_name);
   if (list.length === 0) return null;
@@ -66,7 +84,7 @@ export function factsLines(eventType: IngestEventType, facts: IngestFacts): stri
     else if (index) bits.push(`New index: ${index}${delta ? ` (${delta})` : ''}`);
     if (score || facts.course) {
       bits.push(
-        `after ${score ? `a ${score}` : 'a round'}${facts.course ? ` at ${facts.course}` : ''}` +
+        `after ${score ? `${articleForNumber(score)} ${score}` : 'a round'}${facts.course ? ` at ${facts.course}` : ''}` +
           (diff ? ` (differential ${diff})` : ''),
       );
     }
