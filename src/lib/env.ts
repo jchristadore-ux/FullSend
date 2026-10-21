@@ -32,13 +32,36 @@ function req(name: string): string {
  * every deploy and is only useful for previews. Localhost is last, and
  * `appUrlIsLocal` lets the OAuth routes refuse rather than send it to a
  * platform.
+ *
+ * Previews are the exception to "explicit wins". A Vercel Preview deployment
+ * that inherits `NEXT_PUBLIC_APP_URL` (often the production URL) would build
+ * every magic link and OAuth redirect against production, so nobody could sign
+ * in to a PR preview. On `VERCEL_ENV=preview` the deployment's own origin wins:
+ * `VERCEL_BRANCH_URL` (stable per branch) first, then `VERCEL_URL` (per
+ * deploy), then the usual chain. Production and local resolution are unchanged.
+ *
+ * Exported, and parameterised on the environment, for tests only.
  */
-function resolveAppUrl(): string {
-  const explicit = opt('NEXT_PUBLIC_APP_URL');
+export function resolveAppUrl(source: Record<string, string | undefined> = process.env): string {
+  const get = (name: string): string | undefined => {
+    const v = source[name];
+    return v && v.trim().length > 0 ? v.trim() : undefined;
+  };
+  const https = (host: string): string =>
+    (/^https?:\/\//i.test(host) ? host : `https://${host}`).replace(/\/+$/, '');
+
+  if (get('VERCEL_ENV') === 'preview') {
+    const branch = get('VERCEL_BRANCH_URL');
+    if (branch) return https(branch);
+    const deployment = get('VERCEL_URL');
+    if (deployment) return https(deployment);
+  }
+
+  const explicit = get('NEXT_PUBLIC_APP_URL');
   if (explicit) return explicit.replace(/\/+$/, '');
-  const production = opt('VERCEL_PROJECT_PRODUCTION_URL');
+  const production = get('VERCEL_PROJECT_PRODUCTION_URL');
   if (production) return `https://${production}`;
-  const deployment = opt('VERCEL_URL');
+  const deployment = get('VERCEL_URL');
   if (deployment) return `https://${deployment}`;
   return 'http://localhost:3000';
 }
